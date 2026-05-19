@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# PLAN_0.1.0 Phase G — pre-release check.
+#
+# Single operator-run script that verifies the gem is ready to bump
+# from 0.1.0-unreleased to a tagged 0.1.0. Not a CI pipeline — the
+# gem is path-vendored under the substrate, no remote CI yet.
+#
+# Steps:
+#   1. Locate the sqlite-sparql release artifact (.dylib / .so).
+#   2. Run `bundle exec rspec`.
+#   3. Report green / red.
+
+set -u
+
+cd "$(dirname "$0")/.." || exit 1
+
+GEM_ROOT="$(pwd)"
+EXT_RELEASE_DIR="$GEM_ROOT/../sqlite-sparql/target/release"
+
+red()    { printf '\033[31m%s\033[0m\n' "$1"; }
+green()  { printf '\033[32m%s\033[0m\n' "$1"; }
+yellow() { printf '\033[33m%s\033[0m\n' "$1"; }
+
+# ── 1. Locate the engine artifact ────────────────────────────────
+
+EXT_PATH=""
+if [ -n "${MM_SQLITE_SPARQL_PATH:-}" ] && [ -f "$MM_SQLITE_SPARQL_PATH" ]; then
+  EXT_PATH="$MM_SQLITE_SPARQL_PATH"
+else
+  for candidate in \
+    "$EXT_RELEASE_DIR/libsqlite_sparql.dylib" \
+    "$EXT_RELEASE_DIR/libsqlite_sparql.so" \
+    "$EXT_RELEASE_DIR/sqlite_sparql.dll"
+  do
+    if [ -f "$candidate" ]; then
+      EXT_PATH="$candidate"
+      break
+    fi
+  done
+fi
+
+if [ -z "$EXT_PATH" ]; then
+  yellow "⚠  sqlite-sparql release artifact not found."
+  yellow "   Build with:"
+  yellow "     cd ../sqlite-sparql && cargo build --release"
+  yellow "   Or set MM_SQLITE_SPARQL_PATH to an already-built .dylib / .so."
+  yellow "   Round-trip specs will skip; contract specs still run."
+else
+  green "✓ engine artifact: $EXT_PATH"
+  # Export so Semantica::Loader.extension_path picks it up via the
+  # MM_SQLITE_SPARQL_PATH override. Necessary because the Loader's
+  # DEFAULT_PATHS are resolved relative to Dir.pwd (or Rails.root.parent),
+  # which doesn't point at the substrate root when bin/check is run
+  # from inside the gem dir.
+  export MM_SQLITE_SPARQL_PATH="$EXT_PATH"
+fi
+
+# ── 2. Run rspec ─────────────────────────────────────────────────
+
+if ! command -v bundle >/dev/null 2>&1; then
+  red "✗ `bundle` not on PATH — install Bundler before running bin/check."
+  exit 1
+fi
+
+echo
+echo "Running bundle exec rspec ..."
+echo
+if bundle exec rspec; then
+  echo
+  green "✓ rspec green"
+  if [ -z "$EXT_PATH" ]; then
+    yellow "  (round-trip specs skipped — build the engine to exercise them)"
+  fi
+  exit 0
+else
+  echo
+  red "✗ rspec red — fix before tagging 0.1.0"
+  exit 1
+fi

@@ -3,6 +3,7 @@
 $LOAD_PATH.unshift File.expand_path("../lib", __dir__)
 
 require "rails-semantica"
+require_relative "support/extension_environment"
 
 RSpec.configure do |config|
   config.expect_with :rspec do |expectations|
@@ -17,5 +18,19 @@ RSpec.configure do |config|
 
   if config.files_to_run.one?
     config.default_formatter = "doc"
+  end
+
+  # PLAN_0.1.0 Phase G — extension-environment lifecycle.
+  #
+  # Specs that tag `:requires_extension` round-trip real SPARQL
+  # through the compiled sqlite-sparql binary. If the binary isn't
+  # on disk, those specs skip with a one-line build hint rather than
+  # failing the suite — the gem can be exercised at the contract /
+  # envelope level without the engine present.
+  config.before(:each, :requires_extension) do
+    unless Semantica::SpecSupport::ExtensionEnvironment.available?
+      skip Semantica::SpecSupport::ExtensionEnvironment.skip_reason
+    end
+    Semantica::SpecSupport::ExtensionEnvironment.reset_store!
   end
 end

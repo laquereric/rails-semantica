@@ -83,7 +83,27 @@ Semantica::Sparql.construct(<<~SPARQL)
   WHERE     { ?p <schema:category> "printer" }
 SPARQL
 # => { ok: true, ntriples: "<urn:mm:product:EPET2850> <derived:hot> true .\n..." }
+
+# Write surface — INSERT DATA / DELETE DATA / CLEAR ALL.
+# Arbitrary SPARQL UPDATE is post-0.1.0; reach for the scalar
+# functions (rdf_insert / rdf_delete / etc.) directly if you need
+# more. Storable's lifecycle hooks use the two DATA forms below.
+Semantica::Sparql.execute(<<~SPARQL)
+  INSERT DATA { <urn:mm:product:EPET2850> <schema:tag> "hot" . }
+SPARQL
+# => { ok: true, count: 1 }
 ```
+
+Failure envelopes carry a verbatim because-clause:
+
+```ruby
+Semantica::Sparql.select("SELEC bogus") # malformed
+# => { ok: false, reason: :sparql_parse_error, because: "..." }
+```
+
+Pinned `:reason` symbols (v0.1.0 contract):
+`:sparql_parse_error`, `:extension_not_loaded`,
+`:ar_connection_error`, `:unexpected_error`.
 
 ## Why opt-in?
 
@@ -96,27 +116,54 @@ discipline: every refusal carries `{ ok: false, reason:, because: }`
 verbatim because-clauses (Architect's-No #18). Operators branch on
 `result[:ok]` rather than rescuing.
 
-## v1.0 contract — what's still mutable
+## What's stable at v0.1.0 vs. still mutable
 
-Until v1.0 the following may change without deprecation cycles:
+**Pinned at v0.1.0** (renames or removals will earn a CHANGELOG
+heading + a coordinated substrate bump):
 
-- The `triples do ... end` DSL surface (helpers / coercion rules).
-- The `Semantica::Sparql` envelope shape (additive fields safe; renames possible).
-- The `Loader` configuration story (env var names, Railtie hooks).
-- The relative ordering of `OntologyResolver` cascade tiers when consumed by the substrate.
+- `Semantica::Sparql.{select,ask,construct,execute}` method names + envelope shape (additive fields safe).
+- `Semantica::Sparql` `:reason` symbols (`:sparql_parse_error`, `:extension_not_loaded`, `:ar_connection_error`, `:unexpected_error`).
+- `Semantica::Loader.{ensure_extension_loaded!,extension_path,searched_paths}` surface + `ExtensionMissing` class.
+- `MM_SQLITE_SPARQL_PATH` env var.
+- N-Triples object encoding from `TermSerializer` (String/Integer/Float/Boolean/Time/Date type-dispatch).
 
-When the substrate's consumption settles, this list gets pinned in
-v1.0 + standard semver discipline kicks in.
+**Still operator-fluid** (may change without deprecation cycle
+during v0.x.x):
+
+- The `triples do ... end` DSL helper set — new helpers (e.g.
+  `triples_from:`) may appear; `subject` / `triple` / `if:` stay.
+- `MM_SEMANTICA_SOFT_FAIL` (interim-window boot escape) — removed
+  when the substrate's Phase E cutover lands.
+- The relative ordering of `OntologyResolver` cascade tiers when
+  consumed by the substrate.
+
+When the substrate's consumption settles, the operator-fluid list
+empties + the v1.0 contract is published.
 
 ## License
 
 MIT OR Apache-2.0 at the operator's option. See `LICENSE-MIT` and `LICENSE-APACHE`.
 
+## Pre-release check
+
+```bash
+cd vendor/sqlite-sparql && cargo build --release
+cd ../rails-semantica && bin/check
+```
+
+`bin/check` locates the engine artifact (or warns + continues) and
+runs `bundle exec rspec`. Contract specs run unconditionally;
+round-trip specs skip with a build hint when the `.dylib` / `.so`
+isn't on disk.
+
 ## Cross-references
 
+- [`docs/plans/PLAN_0.1.0.md`](docs/plans/PLAN_0.1.0.md) — this gem's
+  own roadmap to a shippable 0.1.0.
 - [`vendor/sqlite-sparql/README.md`](../sqlite-sparql/README.md) — the
   Rust SQLite extension this gem wraps.
 - [`docs/research/Semantica.md`](../../docs/research/Semantica.md) — the
   substrate-side architectural concept the gem implements.
 - [`docs/plans/PLAN_0_29_1.md`](../../docs/plans/PLAN_0_29_1.md) — the
-  plan that introduces this gem + the substrate's cutover to it.
+  substrate plan that introduces this gem + the substrate's cutover
+  to it (Phases E + F live there, not in this gem's PLAN).
