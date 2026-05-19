@@ -17,10 +17,9 @@ source "https://rubygems.org"
 #
 #   cd ../sqlite-sparql && cargo build --release
 #
-# Consumer-side requirements that sqlite-sparql commits to honour
-# are documented in `../sqlite-sparql/CONSUMER_REQUIREMENT_RAILS_SEMANTICA.md`.
-# Renames / removals listed there require a coordinated bump in
-# this gem.
+# The engine repo (laquereric/sqlite-sparql) owns its own surface
+# documentation. Surface changes there land in that repo; coordinated
+# bumps land here.
 # ────────────────────────────────────────────────────────────────
 
 # Specify dependencies in rails-semantica.gemspec.
