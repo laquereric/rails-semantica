@@ -221,6 +221,34 @@ engine surfaces `"SPARQL evaluation error:"`). v0.5.0 adds
 `:invalid_graph` (blank-node graph IRIs) and `:invalid_dsl`
 (ambiguous DSL — e.g. `execute("CLEAR ALL", graph: …)`).
 
+## Concurrency
+
+Engine ≥ 0.2.0 holds one Oxigraph store per process, shared across
+every SQLite connection on every thread. Writes from one connection
+are visible from any other connection in the same process (pinned
+by `spec/semantica/cross_connection_visibility_spec.rb`).
+
+The three `Storable.dispatch_mode` rungs differ in their atomicity
+under concurrent writes to the same `(subject, predicate)`:
+
+- **`:sparql_update`** — issues a single `DELETE/INSERT WHERE` per
+  predicate. The engine's Oxigraph store handles the
+  delete-then-insert atomically within one engine call. Recommended
+  for apps doing concurrent writes to overlapping data.
+- **`:bulk`** — the lifecycle hook's SELECT-then-bulk-delete-then-
+  bulk-insert is not atomic across threads. Races possible.
+- **`:per_call`** — the SELECT-then-DELETE-then-INSERT pattern is
+  not atomic across threads. Races possible.
+
+Operators with concurrent writes pin via
+`MM_SEMANTICA_DISPATCH_MODE=sparql_update`. Single-threaded apps
+(the common Rails request-per-thread case) see no behavioural
+difference between the modes.
+
+Test isolation under shared store requires `rdf_clear` between
+examples; parallel test workers (e.g. `rspec-parallel`) will
+clobber each other's stores. Run gem-consuming specs serially.
+
 ## Why opt-in?
 
 Rails apps that don't add this gem keep their existing ActiveRecord
@@ -273,6 +301,13 @@ heading + a coordinated substrate bump):
 - `Storable.dispatch_mode` graph-equivalence: all three modes produce identical end states for a graph-scoped model.
 - `Semantica::Sparql` `:reason` symbols `:invalid_graph` (blank-node graph IRIs) + `:invalid_dsl` (ambiguous `CLEAR` + `graph:`).
 
+**Pinned at v0.6.0** (additive on top of v0.5.0):
+
+- `Semantica::Sparql.store_size(graph: …)` → `{ ok:, count: <integer> }`. Omitted graph = `rdf_count_all` (every graph); explicit `nil` = default-graph only; String = named-graph.
+- `Semantica::Loader.engine_version` reader → `String` or `Semantica::Loader::ENGINE_VERSION_UNKNOWN` (`:unknown`). Shape pinned; underlying probe grows when the engine ships `rdf_version()`.
+- Cross-connection visibility property: a write from connection A is visible from connection B (same process), across threads, across named-graph scopes. Pinned by spec.
+- `Storable.dispatch_mode` concurrency contract: `:sparql_update` is atomic per predicate; `:bulk` and `:per_call` race under concurrent writes to the same `(subject, predicate)`. See `## Concurrency`.
+
 **Still operator-fluid** (may change without deprecation cycle
 during v0.x.x):
 
@@ -314,6 +349,9 @@ isn't on disk.
   bulk-write surface + `:bulk` dispatch implementation.
 - [`docs/plans/PLAN_0.5.0.md`](docs/plans/PLAN_0.5.0.md) — the v0.5.0
   named-graph support (`graph:` kwarg + `graph "…"` DSL).
+- [`docs/plans/PLAN_0.6.0.md`](docs/plans/PLAN_0.6.0.md) — the v0.6.0
+  shared-store posture (`store_size` helper, `engine_version` reader,
+  cross-connection visibility, concurrency note).
 - [`vendor/sqlite-sparql/README.md`](../sqlite-sparql/README.md) — the
   Rust SQLite extension this gem wraps.
 - [`docs/research/Semantica.md`](../../docs/research/Semantica.md) — the

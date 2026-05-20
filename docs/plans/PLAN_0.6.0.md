@@ -9,6 +9,31 @@
 > `Sparql.store_size` helper backed by `rdf_count_all()` and pins
 > the cross-connection visibility property with an explicit spec.*
 
+## Current state
+
+**Released as v0.6.0 (2026-05-20).** All seven phases landed:
+
+- Phase A — Loader sentinel doc-comment refined; `engine_version`
+  reader returns `:unknown` (engine probe not yet shipped).
+- Phase B — `spec/semantica/cross_connection_visibility_spec.rb`
+  pins same-thread / cross-thread / named-graph visibility.
+- Phase C — `Sparql.store_size(graph: …)` helper backed by
+  `rdf_count_all` / `rdf_count` / `rdf_count(graph)`.
+- Phase D — `Storable.dispatch_mode` concurrency note added;
+  README grows `## Concurrency` section recommending
+  `:sparql_update` for overlapping-write workloads.
+- Phase E — `spec/support/extension_environment.rb` comment block
+  declares `reset_store!` mandatory for test isolation under
+  shared-store; pin parallel-worker incompatibility.
+- Phase F — 11 new specs (137 total).
+- Phase G — VERSION → 0.6.0; CHANGELOG `0.6.0` heading dated;
+  README + CONSUMER_REQUIREMENT_MM.md updated (the latter grows a
+  `## Concurrency model` section).
+
+With v0.6.0 released atop v0.2.0–v0.5.0, the gem's posture matches
+the engine's full 0.5.x feature set. Further evolution is
+gem-internal or engine-driven.
+
 ## Anchors
 
 | Anchor | Where | Role |

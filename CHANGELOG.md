@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.6.0 — 2026-05-20
+
+Closes PLAN_0.6.0. Adapts the gem to the engine's shared-store
+posture (one Oxigraph store per process; engine ≥ 0.2.0).
+
+- Loader sentinel doc-comment refined: clarifies that the
+  process-wide store may already have data from other connections;
+  the sentinel only proves the function is callable on this
+  connection. `Loader.engine_version` reader returns the engine's
+  `rdf_version()` string when present, `:unknown` otherwise
+  (engine 0.5.0 doesn't yet ship the probe; shape pinned now,
+  body grows when it does). New pinned constant
+  `Loader::ENGINE_VERSION_UNKNOWN`.
+- New `Sparql.store_size(graph: …)` helper. Omitted graph →
+  `rdf_count_all()` (every graph including default). Explicit
+  `graph: nil` → `rdf_count()` (default graph only). String →
+  `rdf_count(graph)`.
+- `Storable.dispatch_mode` doc-comment grows a concurrency note:
+  `:sparql_update` is atomic per predicate (single
+  `DELETE/INSERT WHERE` engine call); `:bulk` and `:per_call`
+  race under concurrent writes to the same `(subject, predicate)`.
+  README grows a `## Concurrency` section recommending
+  `MM_SEMANTICA_DISPATCH_MODE=sparql_update` for overlapping-write
+  workloads.
+- `spec/support/extension_environment.rb` comment block updated —
+  `reset_store!` is now mandatory for test isolation (not just
+  hygiene); parallel test workers clobber under shared-store.
+- 11 new specs (137 total): 3 cross-connection visibility
+  (same-thread connection pair, cross-thread, named-graph
+  visibility), 6 `store_size` (surface contract + AR-less refusal
+  + rdf_count_all + default-only + named-graph + blank-node
+  refusal), 2 `engine_version` (no-AR fallback + engine-lacks-
+  probe fallback).
+
 ## 0.5.0 — 2026-05-20
 
 Closes PLAN_0.5.0 against engine ≥ 0.3.0 (current pin 0.5.0

@@ -117,4 +117,18 @@ RSpec.describe Semantica::Loader do
       expect(Semantica::Loader.ensure_extension_loaded!).to eq(:no_active_record)
     end
   end
+
+  describe ".engine_version" do
+    it "returns :unknown without ActiveRecord loaded" do
+      hide_const("ActiveRecord::Base") if defined?(::ActiveRecord::Base)
+      expect(Semantica::Loader.engine_version).to eq(Semantica::Loader::ENGINE_VERSION_UNKNOWN)
+    end
+
+    it "returns :unknown when the engine lacks an rdf_version probe", :requires_extension do
+      # Engine 0.5.0 doesn't ship rdf_version yet — the rescue path
+      # surfaces :unknown. When the engine ships the probe, this
+      # spec becomes "returns a String".
+      expect(Semantica::Loader.engine_version).to eq(Semantica::Loader::ENGINE_VERSION_UNKNOWN)
+    end
+  end
 end

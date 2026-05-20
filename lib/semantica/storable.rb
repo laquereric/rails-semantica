@@ -81,6 +81,14 @@ module Semantica
     # Operators force a mode via `MM_SEMANTICA_DISPATCH_MODE=...` for
     # predictable behaviour across upgrades. The probe runs once on
     # first call + caches; reset via `dispatch_mode_reset!` (specs).
+    #
+    # PLAN_0.6.0 Phase D — concurrency note. Under engine ≥ 0.2.0
+    # the store is process-wide. Concurrent writes to the same
+    # (subject, predicate) from different threads are atomic under
+    # `:sparql_update` (the engine's Oxigraph store handles the
+    # DELETE/INSERT WHERE in one call); `:bulk` and `:per_call` race.
+    # Recommend `MM_SEMANTICA_DISPATCH_MODE=sparql_update` for
+    # multi-threaded write workloads.
     ENV_DISPATCH_MODE = "MM_SEMANTICA_DISPATCH_MODE"
 
     DISPATCH_MODES = [:sparql_update, :bulk, :per_call].freeze

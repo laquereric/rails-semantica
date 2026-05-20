@@ -130,6 +130,44 @@ module Semantica
     # facade. The engine aborts the whole batch on any malformed
     # row; the gem mirrors that — no partial-success path. Empty
     # input returns `{ ok: true, inserted: 0 }` (or `:deleted: 0`).
+    # PLAN_0.6.0 Phase C — total-triples reader, routed to the
+    # engine's `rdf_count_all()` / `rdf_count()` / `rdf_count(graph)`
+    # scalars.
+    #
+    #   Semantica::Sparql.store_size
+    #     → { ok: true, count: <integer> }  # rdf_count_all — every graph
+    #
+    #   Semantica::Sparql.store_size(graph: nil)
+    #     → { ok: true, count: <integer> }  # rdf_count — default graph only
+    #
+    #   Semantica::Sparql.store_size(graph: "urn:mm:graph:bhphoto")
+    #     → { ok: true, count: <integer> }  # rdf_count(graph)
+    #
+    # Omitting graph: defaults to the cross-graph total; explicit
+    # `graph: nil` opts in to default-graph-only.
+    def store_size(**kwargs)
+      omitted = !kwargs.key?(:graph)
+      graph = kwargs[:graph]
+
+      unless omitted || graph.nil?
+        graph_error = validate_graph(graph)
+        return graph_error if graph_error
+      end
+
+      with_extension do |connection|
+        sql =
+          if omitted
+            "SELECT rdf_count_all()"
+          elsif graph.nil?
+            "SELECT rdf_count()"
+          else
+            "SELECT rdf_count(#{connection.quote(graph)})"
+          end
+        count = connection.select_value(sql)
+        { ok: true, count: count.to_i }
+      end
+    end
+
     def bulk_insert(rows, raw: false)
       bulk_write(rows, "rdf_insert_many", :inserted, raw: raw)
     end

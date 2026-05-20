@@ -28,7 +28,16 @@ module Semantica
   # where database.yml isn't authoritative (test connections,
   # multi-DB setups, scripts that build connections manually).
   module Loader
+    # PLAN_0.6.0 Phase A — the sentinel proves the extension is
+    # callable on the current AR connection. Under engine ≥ 0.2.0
+    # the store is process-wide and may already have data from
+    # other connections; that's expected, not a sign of re-loading.
     SENTINEL_QUERY = "SELECT rdf_count()"
+
+    # PLAN_0.6.0 Phase A — placeholder for an engine version probe.
+    # Returns :unknown until the engine exposes `rdf_version()`.
+    # Pinned shape; the body grows when the engine ships the probe.
+    ENGINE_VERSION_UNKNOWN = :unknown
 
     DEFAULT_PATHS = [
       "vendor/sqlite-sparql/target/release/libsqlite_sparql.dylib",  # macOS
@@ -116,6 +125,20 @@ module Semantica
       # the sentinel function is undefined, so the extension hasn't
       # been loaded yet.
       false
+    end
+
+    # PLAN_0.6.0 Phase A — best-effort engine-version reader.
+    # Returns the engine's `rdf_version()` string when the engine
+    # exposes it (engine ≥ TBD), or :unknown otherwise. Operators
+    # who need the engine version today read the substrate's
+    # submodule pin for ground truth; this is a forward-looking
+    # surface stub.
+    def engine_version
+      return ENGINE_VERSION_UNKNOWN unless defined?(::ActiveRecord::Base)
+      connection = ::ActiveRecord::Base.connection
+      connection.select_value("SELECT rdf_version()").to_s
+    rescue StandardError
+      ENGINE_VERSION_UNKNOWN
     end
   end
 end

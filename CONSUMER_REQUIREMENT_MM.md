@@ -143,6 +143,23 @@ So upstream is free to change these without notifying MM:
 - The class names of internal helpers (e.g., term serializers). MM only
   references the documented public surface.
 
+## Concurrency model
+
+PLAN_0.6.0 (v0.6.0) pinned the shared-store contract MM relies on:
+
+- The engine holds one Oxigraph store per process; writes from one
+  AR connection are visible from any other connection in the same
+  process, including across threads. (Pre-engine-0.2.0 thread-local
+  storage was a footgun; v0.6.0 documents the now-correct contract.)
+- For multi-threaded writes to overlapping `(subject, predicate)`
+  pairs, MM pins `MM_SEMANTICA_DISPATCH_MODE=sparql_update` —
+  that's the only dispatch mode that's atomic per predicate
+  replacement (single engine call). `:bulk` and `:per_call` race.
+- Test isolation: substrate-side specs that exercise `Storable`
+  must run serially. Parallel test workers clobber the shared
+  process-wide store; MM's RSpec config doesn't enable parallel
+  workers for the same reason.
+
 ## Drift signals
 
 A drift between this file and the gem's behaviour is detectable in these

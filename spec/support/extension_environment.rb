@@ -26,6 +26,12 @@ module Semantica
 
         # Empties the triple store between examples so test isolation
         # holds. Cheap — single `rdf_clear()` call.
+        #
+        # PLAN_0.6.0 Phase E — under engine ≥ 0.2.0 the store is
+        # shared process-wide. `reset_store!` is *required* between
+        # examples (not just hygiene); parallel test workers (e.g.
+        # rspec-parallel) will clobber each other's stores. Run gem
+        # specs serially.
         def reset_store!
           return unless available?
           ::ActiveRecord::Base.connection.execute("SELECT rdf_clear()")
