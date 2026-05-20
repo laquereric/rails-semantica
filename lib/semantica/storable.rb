@@ -2,6 +2,7 @@
 
 require "active_support/concern"
 require "active_support/core_ext/class/attribute"
+require "json"
 
 module Semantica
   # PLAN_0.1.0 Phase D — per-model triple-emission DSL.
@@ -417,10 +418,17 @@ module Semantica
       #   true/false   → "true"^^<xsd:boolean>
       #   Time/DateTime→ "iso8601"^^<xsd:dateTime>
       #   Date         → "iso8601"^^<xsd:date>
+      #   Hash         → "{...JSON...}"^^<xsd:string>  (PLAN_0.2.0 Phase C)
+      #   Array        → "[...JSON...]"^^<xsd:string>  (PLAN_0.2.0 Phase C)
       #   Other        → value.to_s as literal
       #
       # Operators wanting IRI objects pass already-wrapped strings
       # (e.g. `"<urn:other>"`) — those pass through unchanged.
+      #
+      # JSON dispatch uses xsd:string rather than rdf:JSON so the
+      # engine's existing N-Triples parser round-trips the value
+      # cleanly. Operators reading back via Sparql.select can
+      # `JSON.parse` the resulting literal value.
       def object(value)
         case value
         when String
@@ -435,6 +443,8 @@ module Semantica
           typed_literal(value.to_s, "#{XSD}#double")
         when TrueClass, FalseClass
           typed_literal(value.to_s, "#{XSD}#boolean")
+        when Hash, Array
+          typed_literal(::JSON.generate(value), "#{XSD}#string")
         else
           temporal_or_literal(value)
         end

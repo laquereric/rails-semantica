@@ -2,6 +2,22 @@
 
 ## 0.2.0 — (unreleased)
 
+PLAN_0.2.0 Phase C — JSON / structured-literal object types.
+
+- `TermSerializer.object` grows `when Hash, Array` branches: values
+  are JSON-encoded via `JSON.generate(value)` and emitted as typed
+  literals with `xsd:string` datatype.
+- xsd:string chosen over rdf:JSON for engine compatibility — the
+  existing NT parser round-trips xsd:string cleanly; rdf:JSON
+  support is post-0.2.0 if MM signals demand.
+- N-Triples literal escaping composes correctly on top of
+  JSON.generate output: JSON's `\"` becomes `\\\"` in the wire
+  literal. Operators read back via `Sparql.select` and
+  `JSON.parse` the resulting literal value.
+- `require "json"` added to storable.rb.
+- 4 new specs covering Hash / Array / embedded-quote escape /
+  empty-collection JSON round-trips. 62 total green via `bin/check`.
+
 PLAN_0.2.0 Phase B — `each` blocks (collection iteration + multi-value predicates).
 
 - `Recorder#each(collection_lambda, &predicates_block)` declares a

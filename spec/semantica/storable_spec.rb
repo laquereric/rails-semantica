@@ -57,6 +57,30 @@ RSpec.describe Semantica::Storable do
       it "passes already-wrapped IRI strings through unchanged (operator escape hatch)" do
         expect(described_class.object("<urn:other>")).to eq("<urn:other>")
       end
+
+      describe "PLAN_0.2.0 Phase C — JSON / structured-literal object types" do
+        it "JSON-encodes Hash values as xsd:string literals" do
+          result = described_class.object({ a: 1, b: [2, 3] })
+          expect(result).to eq('"{\\"a\\":1,\\"b\\":[2,3]}"^^<http://www.w3.org/2001/XMLSchema#string>')
+        end
+
+        it "JSON-encodes Array values as xsd:string literals" do
+          result = described_class.object([1, "two", { three: 3 }])
+          expect(result).to eq('"[1,\\"two\\",{\\"three\\":3}]"^^<http://www.w3.org/2001/XMLSchema#string>')
+        end
+
+        it "escapes embedded quotes in JSON-encoded hash values" do
+          result = described_class.object({ name: 'say "hi"' })
+          # JSON.generate produces {"name":"say \"hi\""}, which N-Triples
+          # literal escaping then escapes the backslash + quote pairs.
+          expect(result).to include("\\\\\\\"hi\\\\\\\"")
+        end
+
+        it "empty Hash and Array round-trip as JSON" do
+          expect(described_class.object({})).to include('"{}"')
+          expect(described_class.object([])).to include('"[]"')
+        end
+      end
     end
   end
 

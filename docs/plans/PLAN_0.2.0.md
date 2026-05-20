@@ -18,18 +18,29 @@
 
 ## Current state
 
-**Phase A landed** (multi-subject emission): `on_subject` blocks
-alongside primary subject + predicates; literal-string predicate
-values via TripleRecording's `as_callable`. 7 specs.
+**Phases A + B + C landed.**
 
-**Phase B landed** (collection iteration + multi-value): `each`
-blocks; per-item-interpolated predicates; read-replace per emitted
-predicate; `Sparql.execute("DELETE WHERE { <s> <p> ?o }")` public
-surface; INSERT DATA body uses `\n`-separated triples. 8 specs. 58
-total green via `bin/check`.
+- **Phase A** (multi-subject emission): `on_subject` blocks; literal-
+  string predicate values via TripleRecording's `as_callable`.
+- **Phase B** (collection iteration + multi-value): `each` blocks;
+  per-item-interpolated predicates; read-replace per emitted
+  predicate; `Sparql.execute("DELETE WHERE { <s> <p> ?o }")` public
+  surface; INSERT DATA body uses `\n`-separated triples.
+- **Phase C** (JSON / structured-literal objects): `TermSerializer.object`
+  handles `Hash` / `Array` via `JSON.generate` → xsd:string typed
+  literal.
 
-Phases C (JSON literals), F (specs), G (docs) still open. D + E are
-pointers to PLAN_0.5.0 + PLAN_0.4.0 respectively.
+62 specs green via `bin/check` (up from 43 at v0.1.0).
+
+Phase F (specs) + Phase G (docs) effectively closed by the inline
+spec coverage + CHANGELOG entries per phase. Phases D + E are
+pointers to PLAN_0.5.0 + PLAN_0.4.0.
+
+**v0.2.0 is implementation-complete on its own scope**; ready to
+tag when MM picks up the SHA. The named-graph (PLAN_0.5.0) and
+bulk-write (PLAN_0.4.0) extensions ship as their own gem versions
+even though MM's CONSUMER_REQUIREMENT_MM.md lists them under the
+v0.2.0 ask set.
 
 Shipped at v0.1.0:
 
