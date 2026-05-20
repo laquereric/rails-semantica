@@ -513,4 +513,99 @@ RSpec.describe Semantica::Storable do
       expect(after[:results]).to be_empty
     end
   end
+
+  describe "PLAN_0.5.0 — `graph \"…\"` declaration", :requires_extension do
+    before(:each) do
+      ::ActiveRecord::Base.connection.execute(<<~SQL)
+        CREATE TABLE IF NOT EXISTS graph_widgets (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          sku TEXT NOT NULL,
+          name TEXT
+        )
+      SQL
+      ::ActiveRecord::Base.connection.execute("DELETE FROM graph_widgets")
+
+      unless Object.const_defined?(:GraphWidget)
+        gw_class = Class.new(::ActiveRecord::Base) do
+          self.table_name = "graph_widgets"
+          include ::Semantica::Storable
+
+          triples do
+            graph "urn:mm:graph:bhphoto"
+            subject -> { "urn:mm:gw:#{sku}" }
+            triple "schema:name", -> { name }
+          end
+        end
+        Object.const_set(:GraphWidget, gw_class)
+      end
+
+      Semantica::Sparql.execute("CLEAR ALL")
+    end
+
+    it "Recorder captures graph_iri on the Declaration" do
+      decl = GraphWidget.semantica_triples_declaration
+      expect(decl.graph_iri).to eq("urn:mm:graph:bhphoto")
+    end
+
+    it "Declaration.graph_iri is nil for models without a graph declaration" do
+      # Widget (from prior describe block) doesn't declare graph
+      expect(Widget.semantica_triples_declaration.graph_iri).to be_nil
+    end
+
+    it "create! emits triples into the named graph, NOT the default graph" do
+      GraphWidget.create!(sku: "G1", name: "Named")
+
+      in_graph = Semantica::Sparql.ask(
+        "ASK { <urn:mm:gw:G1> <schema:name> ?o }",
+        graph: "urn:mm:graph:bhphoto",
+      )
+      expect(in_graph).to eq(ok: true, value: true)
+
+      in_default = Semantica::Sparql.ask("ASK { <urn:mm:gw:G1> <schema:name> ?o }")
+      expect(in_default).to eq(ok: true, value: false)
+    end
+
+    it "update! retracts old + inserts new — only in the declared graph" do
+      gw = GraphWidget.create!(sku: "G2", name: "Original")
+      gw.update!(name: "Updated")
+
+      original = Semantica::Sparql.ask(
+        %(ASK { <urn:mm:gw:G2> <schema:name> "Original" }),
+        graph: "urn:mm:graph:bhphoto",
+      )
+      updated = Semantica::Sparql.ask(
+        %(ASK { <urn:mm:gw:G2> <schema:name> "Updated" }),
+        graph: "urn:mm:graph:bhphoto",
+      )
+
+      expect(original[:value]).to be(false), "old value should be retracted"
+      expect(updated[:value]).to be(true)
+    end
+
+    it "destroy retracts every declared triple — only in the declared graph" do
+      gw = GraphWidget.create!(sku: "G3", name: "Doomed")
+      gw.destroy
+
+      after = Semantica::Sparql.ask(
+        "ASK { <urn:mm:gw:G3> <schema:name> ?o }",
+        graph: "urn:mm:graph:bhphoto",
+      )
+      expect(after).to eq(ok: true, value: false)
+    end
+
+    it "cross-graph isolation — same subject in default graph survives operations on the named graph" do
+      # Inject a default-graph triple by hand at the same subject IRI.
+      Semantica::Sparql.execute(
+        %(INSERT DATA { <urn:mm:gw:G4> <schema:name> "DefaultSurvivor" . }),
+      )
+      gw = GraphWidget.create!(sku: "G4", name: "InNamedGraph")
+      gw.destroy
+
+      survivor = Semantica::Sparql.ask(
+        %(ASK { <urn:mm:gw:G4> <schema:name> "DefaultSurvivor" }),
+      )
+      expect(survivor[:value]).to be(true),
+        "default-graph triple at the same subject must survive named-graph destroy"
+    end
+  end
 end

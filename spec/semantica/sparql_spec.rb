@@ -150,4 +150,165 @@ RSpec.describe Semantica::Sparql do
       expect(@result[:because]).to include("unsupported SPARQL UPDATE")
     end
   end
+
+  describe "PLAN_0.5.0 — graph: kwarg" do
+    describe "validation (no live extension required)" do
+      it "blank-node graph IRIs refuse with :invalid_graph" do
+        result = Semantica::Sparql.select("SELECT ?s WHERE { ?s ?p ?o }", graph: "_:bnode")
+        expect(result[:ok]).to be(false)
+        expect(result[:reason]).to eq(:invalid_graph)
+        expect(result[:because]).to include("blank-node")
+      end
+
+      it "blank-node refusal fires for all four methods" do
+        %i[select ask construct execute].each do |m|
+          result = Semantica::Sparql.public_send(m, "ASK { ?s ?p ?o }", graph: "_:b0")
+          expect(result[:reason]).to eq(:invalid_graph), -> { "#{m} should refuse blank-node graphs" }
+        end
+      end
+
+      it "GraphScoping inserts FROM <graph> between SELECT projection and WHERE body" do
+        scoped = Semantica::Sparql::GraphScoping.scope_read(
+          "SELECT ?s WHERE { ?s ?p ?o }",
+          "urn:mm:graph:bhphoto",
+        )
+        # Expected shape: SELECT ?s\nFROM <graph>\nWHERE { ?s ?p ?o }
+        expect(scoped).to match(/SELECT \?s\s+FROM <urn:mm:graph:bhphoto>\s+WHERE \{/)
+      end
+
+      it "GraphScoping handles WHERE-less body (SELECT ?s { ... })" do
+        scoped = Semantica::Sparql::GraphScoping.scope_read(
+          "SELECT ?s { ?s ?p ?o }",
+          "urn:g",
+        )
+        expect(scoped).to match(/SELECT \?s\s+FROM <urn:g>\s+WHERE \{/)
+      end
+
+      it "GraphScoping handles ASK { ... }" do
+        scoped = Semantica::Sparql::GraphScoping.scope_read(
+          "ASK { <urn:s> <urn:p> ?o }",
+          "urn:g",
+        )
+        expect(scoped).to match(/ASK\s+FROM <urn:g>\s+WHERE \{/)
+      end
+
+      it "GraphScoping handles CONSTRUCT (skips template, anchors on body brace)" do
+        scoped = Semantica::Sparql::GraphScoping.scope_read(
+          "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
+          "urn:g",
+        )
+        # Template `{ ?s ?p ?o }` survives intact; FROM lands before body's WHERE.
+        expect(scoped).to match(/CONSTRUCT \{ \?s \?p \?o \}\s+FROM <urn:g>\s+WHERE \{ \?s \?p \?o \}/)
+      end
+
+      it "GraphScoping is a no-op when graph is nil or empty" do
+        expect(Semantica::Sparql::GraphScoping.scope_read("SELECT ?s WHERE { ?s ?p ?o }", nil))
+          .to eq("SELECT ?s WHERE { ?s ?p ?o }")
+        expect(Semantica::Sparql::GraphScoping.scope_read("SELECT ?s WHERE { ?s ?p ?o }", ""))
+          .to eq("SELECT ?s WHERE { ?s ?p ?o }")
+      end
+
+      it "GraphScoping preserves PREFIX preamble" do
+        scoped = Semantica::Sparql::GraphScoping.scope_read(
+          "PREFIX foaf: <http://xmlns.com/foaf/0.1/>\nSELECT ?s WHERE { ?s foaf:name ?n }",
+          "urn:g",
+        )
+        expect(scoped).to start_with("PREFIX foaf: <http://xmlns.com/foaf/0.1/>")
+        expect(scoped).to include("FROM <urn:g>")
+      end
+    end
+
+    describe "round-trip against a live extension", :requires_extension do
+      before { Semantica::Sparql.execute("CLEAR ALL") }
+
+      it "execute INSERT DATA with graph: routes to the named graph" do
+        Semantica::Sparql.execute(
+          "INSERT DATA { <urn:p:1> <urn:p:name> \"named\" . }",
+          graph: "urn:mm:graph:bhphoto",
+        )
+        Semantica::Sparql.execute(
+          "INSERT DATA { <urn:p:2> <urn:p:name> \"default\" . }",
+        )
+
+        bhphoto = Semantica::Sparql.select(
+          "SELECT ?s WHERE { ?s <urn:p:name> ?o }",
+          graph: "urn:mm:graph:bhphoto",
+        )
+        # Engine returns IRIs N-Triples-wrapped.
+        expect(bhphoto[:results].map { |r| r["s"] }).to contain_exactly("<urn:p:1>")
+
+        default = Semantica::Sparql.select("SELECT ?s WHERE { ?s <urn:p:name> ?o }")
+        expect(default[:results].map { |r| r["s"] }).to contain_exactly("<urn:p:2>")
+      end
+
+      it "execute DELETE DATA with graph: scopes to that graph" do
+        Semantica::Sparql.execute(
+          "INSERT DATA { <urn:p:1> <urn:p:name> \"X\" . }",
+          graph: "urn:mm:graph:bhphoto",
+        )
+        Semantica::Sparql.execute(
+          "INSERT DATA { <urn:p:1> <urn:p:name> \"X\" . }",
+        )
+
+        Semantica::Sparql.execute(
+          "DELETE DATA { <urn:p:1> <urn:p:name> \"X\" . }",
+          graph: "urn:mm:graph:bhphoto",
+        )
+
+        expect(
+          Semantica::Sparql.ask(
+            "ASK { <urn:p:1> <urn:p:name> \"X\" }",
+            graph: "urn:mm:graph:bhphoto",
+          )[:value]
+        ).to be(false), "named-graph triple should be gone"
+
+        expect(
+          Semantica::Sparql.ask("ASK { <urn:p:1> <urn:p:name> \"X\" }")[:value]
+        ).to be(true), "default-graph triple must survive"
+      end
+
+      it "DELETE WHERE { <s> <p> ?o } with graph: only touches the named graph" do
+        Semantica::Sparql.execute(
+          "INSERT DATA { <urn:p:1> <urn:p:n> \"a\" . <urn:p:1> <urn:p:n> \"b\" . }",
+          graph: "urn:g:bhphoto",
+        )
+        Semantica::Sparql.execute(
+          "INSERT DATA { <urn:p:1> <urn:p:n> \"survivor\" . }",
+        )
+
+        Semantica::Sparql.execute(
+          "DELETE WHERE { <urn:p:1> <urn:p:n> ?o }",
+          graph: "urn:g:bhphoto",
+        )
+
+        bhphoto = Semantica::Sparql.select(
+          "SELECT ?o WHERE { <urn:p:1> <urn:p:n> ?o }",
+          graph: "urn:g:bhphoto",
+        )
+        expect(bhphoto[:results]).to be_empty
+
+        default = Semantica::Sparql.select(
+          "SELECT ?o WHERE { <urn:p:1> <urn:p:n> ?o }",
+        )
+        # Engine returns literals N-Triples-quoted.
+        expect(default[:results].map { |r| r["o"] }).to contain_exactly('"survivor"')
+      end
+
+      it "CLEAR ALL + graph: refuses with :invalid_dsl" do
+        result = Semantica::Sparql.execute("CLEAR ALL", graph: "urn:g:bhphoto")
+        expect(result[:ok]).to be(false)
+        expect(result[:reason]).to eq(:invalid_dsl)
+        expect(result[:because]).to include("CLEAR ALL")
+      end
+
+      it "omitting graph: keeps v0.4.0 behaviour bit-for-bit" do
+        Semantica::Sparql.execute(
+          "INSERT DATA { <urn:plain> <urn:p> \"v\" . }",
+        )
+        expect(
+          Semantica::Sparql.ask("ASK { <urn:plain> <urn:p> \"v\" }")[:value]
+        ).to be(true)
+      end
+    end
+  end
 end

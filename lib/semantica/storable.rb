@@ -93,12 +93,13 @@ module Semantica
       decl = self.class.semantica_triples_declaration
       return unless decl
 
-      semantica_emit_for_(decl.subject_lambda, decl.predicates)
+      graph = decl.graph_iri
+      semantica_emit_for_(decl.subject_lambda, decl.predicates, graph)
       decl.on_subject_blocks.each do |block|
-        semantica_emit_for_(block.subject_lambda, block.predicates)
+        semantica_emit_for_(block.subject_lambda, block.predicates, graph)
       end
       decl.each_blocks.each do |each_block|
-        semantica_emit_each_block_(decl.subject_lambda, each_block)
+        semantica_emit_each_block_(decl.subject_lambda, each_block, graph)
       end
       true
     end
@@ -107,39 +108,41 @@ module Semantica
       decl = self.class.semantica_triples_declaration
       return unless decl
 
-      semantica_retract_for_(decl.subject_lambda, decl.predicates)
+      graph = decl.graph_iri
+      semantica_retract_for_(decl.subject_lambda, decl.predicates, graph)
       decl.on_subject_blocks.each do |block|
-        semantica_retract_for_(block.subject_lambda, block.predicates)
+        semantica_retract_for_(block.subject_lambda, block.predicates, graph)
       end
       decl.each_blocks.each do |each_block|
-        semantica_retract_each_block_(decl.subject_lambda, each_block)
+        semantica_retract_each_block_(decl.subject_lambda, each_block, graph)
       end
       true
     end
 
     private
 
-    def semantica_emit_for_(subject_lambda, predicates)
+    def semantica_emit_for_(subject_lambda, predicates, graph = nil)
       subject_term = TermSerializer.iri(instance_exec(&subject_lambda))
       predicates.each do |pred|
         next if pred.if_lambda && !instance_exec(&pred.if_lambda)
         value = instance_exec(&pred.value_lambda)
         if value.nil?
-          retract_predicate!(subject_term, TermSerializer.predicate(pred.iri))
+          retract_predicate!(subject_term, TermSerializer.predicate(pred.iri), graph)
         else
           replace_predicate!(
             subject_term,
             TermSerializer.predicate(pred.iri),
             TermSerializer.object(value),
+            graph,
           )
         end
       end
     end
 
-    def semantica_retract_for_(subject_lambda, predicates)
+    def semantica_retract_for_(subject_lambda, predicates, graph = nil)
       subject_term = TermSerializer.iri(instance_exec(&subject_lambda))
       predicates.each do |pred|
-        retract_predicate!(subject_term, TermSerializer.predicate(pred.iri))
+        retract_predicate!(subject_term, TermSerializer.predicate(pred.iri), graph)
       end
     end
 
@@ -153,7 +156,7 @@ module Semantica
     #   persist. v0.2.0 ships this limitation.
     # - Values returning nil are *skipped* (not emitted as nil-retraction);
     #   the surrounding read-replace per-predicate already cleared the slot.
-    def semantica_emit_each_block_(subject_lambda, each_block)
+    def semantica_emit_each_block_(subject_lambda, each_block, graph = nil)
       subject_term = TermSerializer.iri(instance_exec(&subject_lambda))
       collection = instance_exec(&each_block.collection_lambda)
       return if collection.nil? || (collection.respond_to?(:empty?) && collection.empty?)
@@ -173,6 +176,7 @@ module Semantica
         predicate_term = TermSerializer.predicate(iri)
         del = ::Semantica::Sparql.execute(
           "DELETE WHERE { #{subject_term} #{predicate_term} ?o }",
+          graph: graph,
         )
         raise_if_strict(del, "DELETE WHERE #{predicate_term}")
       end
@@ -185,7 +189,7 @@ module Semantica
       body = resolved.map { |iri, obj|
         "#{subject_term} #{TermSerializer.predicate(iri)} #{obj} ."
       }.join("\n")
-      ins = ::Semantica::Sparql.execute("INSERT DATA { #{body} }")
+      ins = ::Semantica::Sparql.execute("INSERT DATA { #{body} }", graph: graph)
       raise_if_strict(ins, "INSERT DATA each_block")
     end
 
@@ -193,7 +197,7 @@ module Semantica
     # enumerate the predicate set; retracts each via DELETE WHERE.
     # If the collection is empty at destroy time, no retraction fires —
     # stale triples from prior saves survive. Same limitation as emit.
-    def semantica_retract_each_block_(subject_lambda, each_block)
+    def semantica_retract_each_block_(subject_lambda, each_block, graph = nil)
       subject_term = TermSerializer.iri(instance_exec(&subject_lambda))
       collection = instance_exec(&each_block.collection_lambda)
       return if collection.nil? || (collection.respond_to?(:empty?) && collection.empty?)
@@ -204,6 +208,7 @@ module Semantica
         predicate_term = TermSerializer.predicate(iri)
         del = ::Semantica::Sparql.execute(
           "DELETE WHERE { #{subject_term} #{predicate_term} ?o }",
+          graph: graph,
         )
         raise_if_strict(del, "DELETE WHERE #{predicate_term}")
       end
@@ -220,18 +225,20 @@ module Semantica
       buffer
     end
 
-    def replace_predicate!(subject_term, predicate_term, new_object_term)
-      retract_predicate!(subject_term, predicate_term)
+    def replace_predicate!(subject_term, predicate_term, new_object_term, graph = nil)
+      retract_predicate!(subject_term, predicate_term, graph)
       result = ::Semantica::Sparql.execute(
         "INSERT DATA { #{subject_term} #{predicate_term} #{new_object_term} . }",
+        graph: graph,
       )
       raise_if_strict(result, "INSERT DATA #{predicate_term}")
       result
     end
 
-    def retract_predicate!(subject_term, predicate_term)
+    def retract_predicate!(subject_term, predicate_term, graph = nil)
       current = ::Semantica::Sparql.select(
         "SELECT ?o WHERE { #{subject_term} #{predicate_term} ?o }",
+        graph: graph,
       )
       return current unless current[:ok]
 
@@ -240,6 +247,7 @@ module Semantica
         next if old_o.nil? || old_o.empty?
         del = ::Semantica::Sparql.execute(
           "DELETE DATA { #{subject_term} #{predicate_term} #{old_o} . }",
+          graph: graph,
         )
         raise_if_strict(del, "DELETE DATA #{predicate_term}")
       end
@@ -254,9 +262,9 @@ module Semantica
 
     # ── DSL recorder ────────────────────────────────────────────
 
-    Declaration = Struct.new(:subject_lambda, :predicates, :on_subject_blocks, :each_blocks) do
-      def initialize(subject_lambda:, predicates:, on_subject_blocks: [], each_blocks: [])
-        super(subject_lambda, predicates, on_subject_blocks, each_blocks)
+    Declaration = Struct.new(:subject_lambda, :predicates, :on_subject_blocks, :each_blocks, :graph_iri) do
+      def initialize(subject_lambda:, predicates:, on_subject_blocks: [], each_blocks: [], graph_iri: nil)
+        super(subject_lambda, predicates, on_subject_blocks, each_blocks, graph_iri)
       end
     end
 
@@ -340,12 +348,30 @@ module Semantica
         @predicates = []
         @on_subject_blocks = []
         @each_blocks = []
+        @graph_iri = nil
       end
 
       # subject -> { "urn:mm:product:#{sku}" }
       # subject { "urn:mm:product:#{sku}" }
       def subject(callable = nil, &block)
         @subject_lambda = callable || block
+      end
+
+      # PLAN_0.5.0 — declare the named graph every triple in the
+      # block emits to. One graph per `triples do…end`; `on_subject`
+      # and `each` blocks inherit it. Operators wanting cross-graph
+      # emissions per record use `Sparql.execute` / `bulk_insert`
+      # directly. Blank-node graphs refuse at the Sparql boundary
+      # (REASON_INVALID_GRAPH); other invalid IRIs surface from the
+      # engine's rdf_insert path.
+      #
+      #   triples do
+      #     graph "urn:mm:graph:bhphoto"
+      #     subject -> { "urn:mm:product:#{sku}" }
+      #     # ...
+      #   end
+      def graph(name)
+        @graph_iri = name
       end
 
       # on_subject -> { "urn:mm:folder:category:#{category}" } do
@@ -387,6 +413,7 @@ module Semantica
           predicates: @predicates.freeze,
           on_subject_blocks: @on_subject_blocks.freeze,
           each_blocks: @each_blocks.freeze,
+          graph_iri: @graph_iri,
         ).freeze
       end
     end

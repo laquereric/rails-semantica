@@ -239,37 +239,41 @@ producing `"{:key=>...}"`, not JSON. Either:
 
 Either landing is acceptable; clarity is the only constraint.
 
-### 5. Named graph parameter
+### 5. Named graph parameter — **SHIPPED (PLAN_0.5.0)**
 
-MM's `ProductTripler` writes to graph `"bhphoto"`, not the default
-graph. This expectation depends on `sqlite-sparql` shipping named
-graph support first. The engine-side ask, driven by RS on MM's
-behalf, lives in
-[`sqlite-sparql/CONSUMER_REQUIREMENT_RS.md`](https://github.com/laquereric/sqlite-sparql/blob/main/CONSUMER_REQUIREMENT_RS.md)
-§"Requested extensions (toward engine v0.x)" items #1–#3 (INSERT
-path, DELETE path, SPARQL graph-pattern read path). MM may also
-list its own engine asks in
-[`sqlite-sparql/CONSUMER_REQUIREMENT_MM.md`](https://github.com/laquereric/sqlite-sparql/blob/main/CONSUMER_REQUIREMENT_MM.md);
-both are accepted entry points to the engine roadmap.
-
-Once the engine ships those items, `rails-semantica`'s Storable
-DSL surfaces the graph parameter:
+Both surfaces MM asked for landed:
 
 ```ruby
-triples do
-  graph "bhphoto"
-  subject -> { "urn:mm:product:#{sku}" }
-  # ...
+# Sparql methods — graph: kwarg on all four
+Semantica::Sparql.select(query, graph: "urn:mm:graph:bhphoto")
+Semantica::Sparql.ask(query, graph: "urn:mm:graph:bhphoto")
+Semantica::Sparql.construct(query, graph: "urn:mm:graph:bhphoto")
+Semantica::Sparql.execute(update, graph: "urn:mm:graph:bhphoto")
+
+# Storable DSL — graph "..." declaration in the triples block
+class Product < ApplicationRecord
+  include Semantica::Storable
+
+  triples do
+    graph "urn:mm:graph:bhphoto"
+    subject -> { "urn:mm:product:#{sku}" }
+    triple "schema:name", -> { name }
+    # `on_subject` and `each` blocks inherit the outer graph.
+  end
 end
 ```
 
-All four `Sparql` methods (`select` / `ask` / `construct` /
-`execute`) accept an optional `graph:` kwarg so callers can scope
-queries and writes. The matching gem-side work is RS's
-[`PLAN_0.2.0.md`](https://github.com/laquereric/rails-semantica/blob/main/docs/plans/PLAN_0.2.0.md)
-Phase D; before the engine ships, the gem returns `{ ok: false,
-reason: :engine_unsupported, because: ... }` when `graph:` is
-passed.
+Semantics:
+
+- `graph: nil` (or omitted) = default graph (v0.4.0 behaviour, unchanged).
+- Read methods textually insert `FROM <graph>` between the projection and WHERE (handles SELECT / ASK / CONSTRUCT; PREFIX preamble preserved; WHERE-less syntactic sugar `SELECT ?s { ... }` also handled).
+- `execute("INSERT DATA { ... }", graph: ...)` routes through the engine's 4-arg `rdf_insert(s,p,o,graph)` (sqlite-sparql 0.3.0). `execute("DELETE DATA { ... }", graph: ...)` and `execute("DELETE WHERE { <s> <p> ?o }", graph: ...)` route through 4-arg `rdf_delete`.
+- Blank-node graph IRIs (`_:foo`) refuse with `:invalid_graph` at the gem boundary.
+- `execute("CLEAR ALL", graph: ...)` and `execute("CLEAR DEFAULT", graph: ...)` refuse with `:invalid_dsl` (ambiguous scoping); operators use `execute("CLEAR GRAPH <urn:...>")` for named-graph clear.
+- `Storable` lifecycle hooks (`after_save` / `after_destroy`) thread the declared graph through the per-call dispatch path (`:bulk` and `:sparql_update` dispatch modes are post-PLAN_0.5.0; not yet shipped).
+- Cross-graph isolation: ops on a graph leave triples for the same subject in other graphs untouched.
+
+New pinned reason symbols (additive on top of v0.1.0): `:invalid_graph`, `:invalid_dsl`.
 
 ### 6. Batched-write convenience (`Sparql.bulk_insert`)
 
