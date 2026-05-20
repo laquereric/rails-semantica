@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.4.0 — (unreleased)
+
+PLAN_0.4.0 Phase A — `Sparql.bulk_insert` / `Sparql.bulk_delete` facade.
+
+- Two new public methods on `Semantica::Sparql`. Accept rows as
+  `Array<Hash>` (`s:`/`p:`/`o:`/optional `graph:`) or `Array<Array>`
+  (3- or 4-tuple). Hash and Array forms are equivalent.
+- Each row's terms run through `TermSerializer.iri` /
+  `TermSerializer.predicate` / `TermSerializer.object`; subjects,
+  predicates, and IRI objects get unwrapped to bare IRIs (the engine
+  wants bare for `s`/`p`, N-Triples form for literal `o`). Single
+  FFI crossing per batch via `rdf_insert_many` / `rdf_delete_many`
+  (engine ≥ 0.4.0; current pin 0.5.0 satisfies).
+- Envelopes: `{ ok: true, inserted: <integer> }` / `{ ok: true,
+  deleted: <integer> }` on success; existing refusal envelope
+  semantics on failure. Counts reflect engine set semantics
+  (`:inserted:` is newly-inserted; duplicates within one batch
+  collapse).
+- Abort-batch-on-error: any malformed row aborts the whole batch
+  before any write touches the store; refusal envelope's
+  `:because:` carries the engine's row-indexed detail
+  (`"row <N>: …"`).
+- Blank-node graphs in a row refuse with row-indexed `:because:`
+  before reaching the engine.
+- 12 new specs (117 total): N-row insert, Hash↔Array form parity,
+  empty input, set-semantics dedup, bulk_delete round-trip,
+  graph-tagged rows, abort-batch-on-error, nullable graph slot,
+  TermSerializer dispatch parity, non-Array input refusal.
+
 ## 0.3.0 — 2026-05-20
 
 Closes PLAN_0.3.0 against engine ≥ 0.5.0. Arbitrary SPARQL UPDATE

@@ -112,6 +112,32 @@ module Semantica
       end
     end
 
+    # PLAN_0.4.0 Phase A — bulk write facade.
+    #
+    #   Semantica::Sparql.bulk_insert([
+    #     { s: "urn:mm:p:1", p: "schema:name", o: "Foo" },
+    #     { s: "urn:mm:p:1", p: "schema:tag",  o: "bar", graph: "urn:g:gh" },
+    #   ])
+    #   # => { ok: true, inserted: 2 }
+    #
+    #   Semantica::Sparql.bulk_insert([
+    #     ["urn:mm:p:1", "schema:name", "Foo"],
+    #     ["urn:mm:p:1", "schema:tag",  "bar", "urn:g:gh"],
+    #   ])
+    #   # => { ok: true, inserted: 2 }
+    #
+    # Refusal envelope semantics inherited from the rest of the
+    # facade. The engine aborts the whole batch on any malformed
+    # row; the gem mirrors that — no partial-success path. Empty
+    # input returns `{ ok: true, inserted: 0 }` (or `:deleted: 0`).
+    def bulk_insert(rows)
+      bulk_write(rows, "rdf_insert_many", :inserted)
+    end
+
+    def bulk_delete(rows)
+      bulk_write(rows, "rdf_delete_many", :deleted)
+    end
+
     # PLAN_0.5.0 Phase A — validate graph IRIs at the gem boundary.
     # nil is the default graph (always valid). Blank-node graphs
     # (`_:foo`) refuse. Everything else (including obvious-junk strings)
@@ -407,6 +433,78 @@ module Semantica
       def unwrap_iri(term)
         return term unless term.start_with?("<") && term.end_with?(">")
         term[1..-2]
+      end
+
+      # PLAN_0.4.0 Phase A — shared backbone for bulk_insert /
+      # bulk_delete. Validates rows, runs each term through
+      # TermSerializer, unwraps IRIs (engine wants bare), marshals
+      # to JSON, single FFI crossing per batch.
+      def bulk_write(rows, fn_name, payload_key)
+        with_extension do |connection|
+          normalized = normalize_bulk_rows(rows)
+          if normalized.empty?
+            { ok: true, payload_key => 0 }
+          else
+            json = ::JSON.generate(normalized)
+            count = connection.select_value(
+              "SELECT #{fn_name}(#{connection.quote(json)})",
+            )
+            { ok: true, payload_key => count.to_i }
+          end
+        end
+      end
+
+      # Accept Array<Hash> or Array<Array>; return a uniform
+      # Array<Array> in the shape rdf_insert_many expects: 3- or
+      # 4-element string arrays. Hash rows with :graph => nil and
+      # Array rows with 3 elements collapse to the 3-element shape.
+      def normalize_bulk_rows(rows)
+        return [] if rows.nil? || rows.empty?
+        unless rows.respond_to?(:each)
+          raise InvalidDsl, "bulk_insert / bulk_delete expects an Array of rows"
+        end
+
+        rows.map.with_index do |row, idx|
+          s, p, o, graph = extract_row(row, idx)
+          validate_bulk_graph(graph, idx) if graph
+
+          s_bare = unwrap_iri(::Semantica::Storable::TermSerializer.iri(s))
+          p_bare = unwrap_iri(::Semantica::Storable::TermSerializer.predicate(p))
+          o_term = ::Semantica::Storable::TermSerializer.object(o)
+          o_engine = o_term.start_with?("<") ? unwrap_iri(o_term) : o_term
+
+          if graph
+            g_bare = unwrap_iri(graph.to_s)
+            [s_bare, p_bare, o_engine, g_bare]
+          else
+            [s_bare, p_bare, o_engine]
+          end
+        end
+      end
+
+      def extract_row(row, idx)
+        case row
+        when Hash
+          [row[:s] || row["s"], row[:p] || row["p"], row[:o] || row["o"],
+           row[:graph] || row["graph"]]
+        when Array
+          case row.length
+          when 3 then [row[0], row[1], row[2], nil]
+          when 4 then row
+          else
+            raise InvalidDsl,
+                  "row #{idx}: array form expects 3 or 4 elements, got #{row.length}"
+          end
+        else
+          raise InvalidDsl,
+                "row #{idx}: expected Hash or Array, got #{row.class}"
+        end
+      end
+
+      def validate_bulk_graph(graph, idx)
+        return unless graph.is_a?(String) && graph.start_with?("_:")
+        raise ::ActiveRecord::StatementInvalid,
+              "row #{idx}: blank-node graph IRIs are not supported"
       end
 
       # Split a single N-Triples line into [subject, predicate, object].
