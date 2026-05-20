@@ -253,71 +253,22 @@ Semantica::Sparql.execute("INSERT DATA { ... }", graph: "bhphoto")
 - Until the engine ships, Phase D ships an `:engine_unsupported`
   refusal envelope when `graph:` is passed.
 
-### Phase E — Bulk write surface (extension #6) — engine-gated
+### Phase E — Bulk write surface (extension #6) — moved to PLAN_0.4.0
 
-**Cannot ship until `sqlite-sparql` exposes `rdf_insert_many`** (a
-batched-insert function that accepts an array argument and loops in
-Rust, eliminating per-call FFI overhead). MM is asking the engine
-for this directly via its own `CONSUMER_REQUIREMENT_MM.md` in the
-engine repo; RS just needs the gem-side facade once the engine
+**Scope moved.** The bulk-write surface (`Sparql.bulk_insert` /
+`bulk_delete` backed by engine `rdf_insert_many` /
+`rdf_delete_many`) has its own canonical plan at
+[`./PLAN_0.4.0.md`](./PLAN_0.4.0.md). The engine prerequisite
+landed in `sqlite-sparql 0.4.0`; the gem-side surface ships as
+v0.4.0 rather than as v0.2.0 Phase E. PLAN_0.4.0 pins the
+implementation against the engine's actual JSON-array argument
+shape and abort-batch-on-error semantics.
+
+v0.2.0's contract additions table still lists `bulk_insert` /
+`bulk_delete` for cross-reference, but the **implementation is
+v0.4.0's responsibility** — those rows graduate from
+`:engine_unsupported` stubs into pinned surfaces when PLAN_0.4.0
 ships.
-
-#### When unblocked, the surface becomes:
-
-```ruby
-Semantica::Sparql.bulk_insert([
-  { s: "urn:mm:product:EPET2850", p: "schema:name",     o: "Epson EcoTank" },
-  { s: "urn:mm:product:EPET2850", p: "schema:category", o: "printer" },
-])
-# => { ok: true, inserted: <integer> }
-
-# Positional form:
-Semantica::Sparql.bulk_insert([
-  ["urn:mm:product:EPET2850", "schema:name",     "Epson EcoTank"],
-  ["urn:mm:product:EPET2850", "schema:category", "printer"],
-])
-
-Semantica::Sparql.bulk_delete(rows)   # symmetric shape
-# => { ok: true, deleted: <integer> }
-```
-
-#### Implementation sketch
-
-- Accept rows as `Array<Hash>` (`s:` / `p:` / `o:` / optional
-  `graph:`) or `Array<Array>` (3- or 4-tuple).
-- Each row's `s`/`p`/`o` runs through `TermSerializer` (same
-  dispatch the `triples do…end` DSL uses). Pre-wrapped values
-  (`"<urn:foo>"`, `"\"value\""`) pass through unchanged.
-- Marshal once into the engine's `rdf_insert_many` array argument
-  (exact form TBD by the engine). Single SQLite call per batch.
-- Returns an envelope: `{ ok: true, inserted: N }` or
-  `{ ok: true, deleted: N }`; refusal envelope on parse/extension
-  errors as usual.
-- `Storable` lifecycle hooks **adopt the bulk path automatically**
-  when present: instead of N `SELECT + DELETE + INSERT DATA` round
-  trips per save, one bulk delete (all current values for declared
-  (subject, predicate) pairs) + one bulk insert (all new values).
-  Idempotency contract unchanged; only the dispatch shape changes.
-
-#### Exit criteria
-
-- Spec: `bulk_insert` of 1000 rows in one call inserts 1000
-  triples; observable via `Sparql.select(count(*))`.
-- Spec: `bulk_delete` of a curated row set removes exactly those.
-- Spec: Hash-form and Array-form rows behave identically.
-- Spec: a `Storable` model save dispatches via the bulk path when
-  the engine surface is present; falls back to the per-call path
-  cleanly when it isn't (engine-gating via runtime probe).
-
-#### Blockers
-
-- Engine surface: `rdf_insert_many(rows TEXT|JSON|...) → INTEGER`.
-  Exact argument shape TBD (JSON array? Repeated args?
-  Multi-statement batch?). Coordinate via the engine's
-  `CONSUMER_REQUIREMENT_MM.md` thread.
-- Until the engine ships, `bulk_insert` / `bulk_delete` ship a
-  `:engine_unsupported` refusal envelope. Storable's per-call
-  fallback is the v0.2.0 default behaviour regardless.
 
 ### Phase F — Spec + audit + bin/check
 
