@@ -25,6 +25,10 @@ RSpec.describe Semantica::Sparql do
       expect(Semantica::Sparql::REASON_AR_CONNECTION_ERROR).to  eq(:ar_connection_error)
       expect(Semantica::Sparql::REASON_UNEXPECTED_ERROR).to     eq(:unexpected_error)
     end
+
+    it "pins the v0.3.0 reason symbol additions" do
+      expect(Semantica::Sparql::REASON_SPARQL_EVAL_ERROR).to eq(:sparql_eval_error)
+    end
   end
 
   describe "contract — envelopes never raise" do
@@ -142,12 +146,92 @@ RSpec.describe Semantica::Sparql do
       expect(@result[:because]).to be_a(String)
     end
 
-    it "execute with an unsupported UPDATE form refuses without raising" do
+    it "execute INSERT DATA still returns a positive count via the fast path" do
+      # PLAN_0.3.0 Phase A regression guard — widening :count to a
+      # signed delta for the arbitrary-UPDATE fallback must not
+      # change the DATA-form contract.
+      Semantica::Sparql.execute("CLEAR ALL")
+      result = Semantica::Sparql.execute(<<~SPARQL)
+        INSERT DATA { <urn:mm:p3a> <urn:p> "v" . }
+      SPARQL
+      expect(result[:ok]).to be(true)
+      expect(result[:count]).to be >= 1
+    end
+  end
+
+  describe "PLAN_0.3.0 Phase A — arbitrary SPARQL UPDATE pass-through", :requires_extension do
+    before { Semantica::Sparql.execute("CLEAR ALL") }
+
+    it "DELETE-with-WHERE removes matching triples + returns signed net delta" do
+      Semantica::Sparql.execute(<<~SPARQL)
+        INSERT DATA {
+          <urn:mm:p1> <urn:p> "v1" .
+          <urn:mm:p2> <urn:p> "v2" .
+        }
+      SPARQL
+
+      result = Semantica::Sparql.execute(<<~SPARQL)
+        DELETE { ?s <urn:p> ?o } WHERE { ?s <urn:p> ?o }
+      SPARQL
+
+      expect(result[:ok]).to be(true)
+      expect(result[:count]).to eq(-2)
+
+      after = Semantica::Sparql.select("SELECT ?s WHERE { ?s ?p ?o }")
+      expect(after[:results]).to eq([])
+    end
+
+    it "INSERT-with-WHERE derives triples from existing ones" do
+      Semantica::Sparql.execute(<<~SPARQL)
+        INSERT DATA {
+          <urn:mm:x1> <urn:type> <urn:foo> .
+          <urn:mm:x2> <urn:type> <urn:foo> .
+        }
+      SPARQL
+
+      result = Semantica::Sparql.execute(<<~SPARQL)
+        INSERT { ?s <urn:derived> "yes" } WHERE { ?s <urn:type> <urn:foo> }
+      SPARQL
+
+      expect(result[:ok]).to be(true)
+      expect(result[:count]).to eq(2)
+
+      derived = Semantica::Sparql.select(
+        "SELECT ?s WHERE { ?s <urn:derived> \"yes\" }",
+      )
+      expect(derived[:results].length).to eq(2)
+    end
+
+    it "DELETE/INSERT/WHERE mixed UPDATE returns signed net delta" do
+      Semantica::Sparql.execute(<<~SPARQL)
+        INSERT DATA {
+          <urn:mm:mix> <urn:tag> "old" .
+        }
+      SPARQL
+
+      # Net delta: -1 (delete) + 1 (insert) = 0
+      result = Semantica::Sparql.execute(<<~SPARQL)
+        DELETE { ?s <urn:tag> "old" }
+        INSERT { ?s <urn:tag> "new" }
+        WHERE  { ?s <urn:tag> "old" }
+      SPARQL
+
+      expect(result[:ok]).to be(true)
+      expect(result[:count]).to eq(0)
+
+      after = Semantica::Sparql.select(
+        "SELECT ?o WHERE { <urn:mm:mix> <urn:tag> ?o }",
+      )
+      expect(after[:results].map { |r| r["o"] }).to eq(["\"new\""])
+    end
+
+    it "malformed UPDATE returns :sparql_parse_error" do
       expect {
-        @result = Semantica::Sparql.execute("INSERT { ?s ?p ?o } WHERE { ?s ?p ?o }")
+        @result = Semantica::Sparql.execute("DELET { ?s ?p ?o } WHERE { ?s ?p ?o }")
       }.not_to raise_error
       expect(@result[:ok]).to be(false)
-      expect(@result[:because]).to include("unsupported SPARQL UPDATE")
+      expect(@result[:reason]).to eq(:sparql_parse_error)
+      expect(@result[:because]).to be_a(String)
     end
   end
 

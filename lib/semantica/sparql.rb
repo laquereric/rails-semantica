@@ -44,6 +44,7 @@ module Semantica
   # sentinel `SELECT rdf_count()` per call.
   module Sparql
     REASON_SPARQL_PARSE_ERROR   = :sparql_parse_error
+    REASON_SPARQL_EVAL_ERROR    = :sparql_eval_error
     REASON_EXTENSION_NOT_LOADED = :extension_not_loaded
     REASON_AR_CONNECTION_ERROR  = :ar_connection_error
     REASON_UNEXPECTED_ERROR     = :unexpected_error
@@ -95,9 +96,12 @@ module Semantica
     # SPARQL 1.1 Update — v0.1.0 supports INSERT DATA / DELETE DATA /
     # CLEAR ALL via the scalar extension functions. v0.5.0 routes
     # graph-scoped writes through the engine's 4-arg `rdf_insert` /
-    # `rdf_delete` forms when `graph:` is set. Arbitrary SPARQL
-    # UPDATE is post-0.5.0 (PLAN_0.3.0); callers that need it should
-    # reach for the scalar functions directly via raw SQL.
+    # `rdf_delete` forms when `graph:` is set. v0.3.0 routes any
+    # UPDATE form that doesn't match the four fast paths through the
+    # engine's `sparql_update` scalar (signed net delta). When
+    # `graph:` is set on an arbitrary UPDATE path, the gem prepends
+    # `WITH <graph>` to the query — SPARQL 1.1's graph-scoping prefix
+    # for INSERT / DELETE / INSERT WHERE / DELETE WHERE forms.
     def execute(query, graph: nil)
       graph_error = validate_graph(graph)
       return graph_error if graph_error
@@ -219,10 +223,19 @@ module Semantica
       # SQLite surfaces SPARQL parse errors and "no such function"
       # both as ActiveRecord::StatementInvalid. Discriminate by the
       # underlying message text.
+      #
+      # PLAN_0.3.0 Phase C — the engine's sparql_update surface prefixes
+      # parse failures with "SPARQL parse error:" and evaluation
+      # failures with "SPARQL evaluation error:". Branch on those so
+      # callers can distinguish "the query didn't parse" from "the query
+      # parsed but referred to undefined predicates / bad IRIs / etc."
       def classify_statement_error(error)
-        msg = error.message.to_s.downcase
-        return REASON_EXTENSION_NOT_LOADED if msg.include?("no such function")
-        return REASON_SPARQL_PARSE_ERROR   if msg.include?("sparql") || msg.include?("parse")
+        msg = error.message.to_s
+        downcased = msg.downcase
+        return REASON_EXTENSION_NOT_LOADED if downcased.include?("no such function")
+        return REASON_SPARQL_EVAL_ERROR    if msg.include?("SPARQL evaluation error")
+        return REASON_SPARQL_PARSE_ERROR   if msg.include?("SPARQL parse error")
+        return REASON_SPARQL_PARSE_ERROR   if downcased.include?("sparql") || downcased.include?("parse")
         REASON_UNEXPECTED_ERROR
       end
 
@@ -262,7 +275,23 @@ module Semantica
           connection.select_value("SELECT rdf_clear()")
           0
         else
-          raise ::ActiveRecord::StatementInvalid, "unsupported SPARQL UPDATE form (v0.5.0 supports INSERT DATA / DELETE DATA / DELETE WHERE { <s> <p> ?o } / CLEAR ALL): #{stripped[0, 80]}"
+          # PLAN_0.3.0 Phase A — engine sparql_update fallback.
+          # Routes arbitrary SPARQL 1.1 UPDATE forms (INSERT WHERE,
+          # DELETE WHERE with bindings, DELETE/INSERT WHERE, COPY,
+          # MOVE, ADD, CLEAR GRAPH, etc.) through the engine's
+          # `sparql_update` scalar. Returns the engine's signed net
+          # delta (inserts − deletes); `count:` widens from unsigned
+          # to signed for this path only.
+          #
+          # PLAN_0.5.0 — when `graph:` is set, prepend SPARQL 1.1's
+          # `WITH <graph>` scoping prefix. Valid for INSERT / DELETE
+          # / INSERT WHERE / DELETE WHERE forms; the engine's
+          # parse-error path will surface anything else.
+          effective = graph ? "WITH <#{graph}>\n#{stripped}" : stripped
+          delta = connection.select_value(
+            "SELECT sparql_update(#{connection.quote(effective)})",
+          )
+          delta.to_i
         end
       end
 

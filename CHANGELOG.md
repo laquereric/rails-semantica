@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.3.0 — (unreleased)
+
+PLAN_0.3.0 Phase A — `Sparql.execute` arbitrary SPARQL UPDATE pass-through.
+
+- `Sparql.execute` `else` branch now routes any UPDATE form that
+  doesn't match the four fast paths (INSERT DATA / DELETE DATA /
+  DELETE WHERE { <s> <p> ?o } / CLEAR ALL) through the engine's
+  `sparql_update` scalar (sqlite-sparql 0.5.0). Returns the engine's
+  signed net delta as `count:` (inserts − deletes). The DATA-form
+  fast paths still return positive counts; the widening from
+  unsigned to signed only affects callers opting into arbitrary
+  UPDATE.
+- New pinned `:reason` symbol `:sparql_eval_error`. The engine
+  surfaces parse failures with `"SPARQL parse error:"` and
+  evaluation failures with `"SPARQL evaluation error:"`;
+  `classify_statement_error` branches on the prefix so callers can
+  distinguish "the query didn't parse" from "the query parsed but
+  referred to undefined predicates / bad IRIs / etc."
+- `graph:` kwarg composes with the new fallback: when set,
+  `WITH <graph>` is prepended to the query (SPARQL 1.1's
+  graph-scoping prefix for INSERT / DELETE / INSERT WHERE / DELETE
+  WHERE forms).
+- 5 new specs (86 total): DELETE-with-WHERE signed-delta,
+  INSERT-with-WHERE derivation, mixed-UPDATE net delta, malformed
+  UPDATE → :sparql_parse_error, INSERT DATA fast-path regression
+  guard. The old "unsupported UPDATE refusal" spec retires; that
+  contract collapses with this phase.
+
 ## 0.2.0 — 2026-05-20
 
 Closes PLAN_0.2.0 (multi-subject emission, collection iteration +
