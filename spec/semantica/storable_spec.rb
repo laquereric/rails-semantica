@@ -91,6 +91,51 @@ RSpec.describe Semantica::Storable do
       decl = recorder.finalize!
       expect(decl.subject_lambda.call).to eq("urn:from-block")
     end
+
+    describe "PLAN_0.2.0 Phase A — on_subject sub-blocks + literal-string predicate values" do
+      it "captures on_subject blocks alongside the primary subject + predicates" do
+        recorder = described_class.new
+        recorder.instance_eval do
+          subject -> { "urn:s" }
+          triple "schema:name", -> { "n" }
+
+          on_subject -> { "urn:other" } do
+            triple "rdf:type",    "<urn:other:Type>"
+            triple "schema:name", -> { "other-name" }
+          end
+        end
+        decl = recorder.finalize!
+
+        expect(decl.on_subject_blocks.length).to eq(1)
+        block = decl.on_subject_blocks.first
+        expect(block.subject_lambda.call).to eq("urn:other")
+        expect(block.predicates.map(&:iri)).to eq(["rdf:type", "schema:name"])
+      end
+
+      it "literal-string predicate object is wrapped as a callable" do
+        recorder = described_class.new
+        recorder.instance_eval do
+          subject -> { "urn:s" }
+          triple "rdf:type", "<urn:Foo>"
+        end
+        decl = recorder.finalize!
+
+        expect(decl.predicates.first.value_lambda).to respond_to(:call)
+        expect(decl.predicates.first.value_lambda.call).to eq("<urn:Foo>")
+      end
+
+      it "raises ArgumentError if on_subject is called without a block" do
+        recorder = described_class.new
+        expect { recorder.on_subject(-> { "urn:other" }) }
+          .to raise_error(ArgumentError, /predicates block/)
+      end
+
+      it "raises ArgumentError if on_subject is called without a subject lambda" do
+        recorder = described_class.new
+        expect { recorder.on_subject(nil) { triple "schema:name", -> { "n" } } }
+          .to raise_error(ArgumentError, /subject lambda/)
+      end
+    end
   end
 
   describe "lifecycle integration", :requires_extension do
@@ -181,6 +226,88 @@ RSpec.describe Semantica::Storable do
 
       result = Semantica::Sparql.ask("ASK { <urn:mm:widget:W5> <schema:name> ?o }")
       expect(result).to eq(ok: true, value: false)
+    end
+  end
+
+  describe "PLAN_0.2.0 Phase A — on_subject lifecycle integration", :requires_extension do
+    before(:each) do
+      ::ActiveRecord::Base.connection.execute(<<~SQL)
+        CREATE TABLE IF NOT EXISTS gadgets (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          sku TEXT NOT NULL,
+          name TEXT,
+          category TEXT
+        )
+      SQL
+      ::ActiveRecord::Base.connection.execute("DELETE FROM gadgets")
+
+      unless Object.const_defined?(:Gadget)
+        gadget_class = Class.new(::ActiveRecord::Base) do
+          self.table_name = "gadgets"
+          include ::Semantica::Storable
+
+          triples do
+            subject -> { "urn:mm:gadget:#{sku}" }
+            triple "schema:name", -> { name }
+
+            on_subject -> { "urn:mm:folder:category:#{category}" } do
+              triple "rdf:type",    "<urn:mm:CategoryFolder>"
+              triple "schema:name", -> { category.to_s.capitalize }
+            end
+          end
+        end
+        Object.const_set(:Gadget, gadget_class)
+      end
+    end
+
+    it "emits primary-subject + on_subject triples on create" do
+      Gadget.create!(sku: "G1", name: "Gadget One", category: "printer")
+
+      primary = Semantica::Sparql.ask(
+        "ASK { <urn:mm:gadget:G1> <schema:name> ?o }",
+      )
+      derived_type = Semantica::Sparql.select(
+        "SELECT ?t WHERE { <urn:mm:folder:category:printer> <rdf:type> ?t }",
+      )
+      derived_name = Semantica::Sparql.select(
+        "SELECT ?n WHERE { <urn:mm:folder:category:printer> <schema:name> ?n }",
+      )
+
+      expect(primary).to eq(ok: true, value: true)
+      expect(derived_type[:ok]).to be(true)
+      expect(derived_type[:results].first["t"]).to include("urn:mm:CategoryFolder")
+      expect(derived_name[:ok]).to be(true)
+      expect(derived_name[:results].first["n"]).to include("Printer")
+    end
+
+    it "retracts both primary + on_subject triples on destroy" do
+      g = Gadget.create!(sku: "G2", name: "Gadget Two", category: "scanner")
+
+      before = Semantica::Sparql.ask(
+        "ASK { <urn:mm:folder:category:scanner> ?p ?o }",
+      )
+      expect(before).to eq(ok: true, value: true)
+
+      g.destroy!
+
+      after_primary = Semantica::Sparql.ask("ASK { <urn:mm:gadget:G2> ?p ?o }")
+      after_folder  = Semantica::Sparql.ask(
+        "ASK { <urn:mm:folder:category:scanner> ?p ?o }",
+      )
+      expect(after_primary).to eq(ok: true, value: false)
+      expect(after_folder).to  eq(ok: true, value: false)
+    end
+
+    it "literal-string predicate object serializes as an IRI (not as a literal)" do
+      Gadget.create!(sku: "G3", name: "Gadget Three", category: "camera")
+
+      # The literal-string "<urn:mm:CategoryFolder>" passes through as
+      # an IRI object (TermSerializer.object detects the wrapping).
+      result = Semantica::Sparql.select(<<~SPARQL)
+        SELECT ?s WHERE { ?s <rdf:type> <urn:mm:CategoryFolder> }
+      SPARQL
+      expect(result[:ok]).to be(true)
+      expect(result[:results].map { |r| r["s"] }.join).to include("camera")
     end
   end
 end

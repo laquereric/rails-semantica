@@ -5,12 +5,14 @@ require "active_support/core_ext/class/attribute"
 
 module Semantica
   # PLAN_0.1.0 Phase D — per-model triple-emission DSL.
+  # PLAN_0.2.0 Phase A — `on_subject` sub-blocks + literal-string
+  # predicate values.
   #
   # ActiveSupport::Concern that takes a `triples do ... end` block
   # declaring a `subject` lambda + an ordered list of
   # `triple(predicate, value_lambda, if: optional_guard_lambda)`
-  # entries. Installs `after_save` + `after_destroy` callbacks that
-  # emit / retract triples via `Semantica::Sparql`.
+  # entries. `on_subject` blocks declare additional emissions on a
+  # different subject IRI; they share the same lifecycle hooks.
   #
   #   class Product < ApplicationRecord
   #     include Semantica::Storable
@@ -20,8 +22,19 @@ module Semantica
   #       triple "schema:name",     -> { name }
   #       triple "schema:category", -> { category }
   #       triple "schema:gtin",     -> { gtin }, if: -> { gtin.present? }
+  #
+  #       on_subject -> { "urn:mm:folder:category:#{category}" } do
+  #         triple "rdf:type",    "<urn:mm:CategoryFolder>"
+  #         triple "schema:name", -> { category.titleize }
+  #       end
   #     end
   #   end
+  #
+  # The `triple` second argument may be a lambda (evaluated in
+  # instance scope each emission) or a literal value (constant
+  # across emissions). Operators wanting an IRI object pass a
+  # pre-wrapped `"<urn:...>"`-shaped string; otherwise the value
+  # routes through `TermSerializer.object` for type dispatch.
   #
   # ## Idempotency contract
   #
@@ -32,7 +45,8 @@ module Semantica
   # record produces identical triples — Oxigraph set semantics make
   # the round-trip a no-op at the store level (though it still costs
   # a SELECT + DELETE + INSERT). Optimising via dirty-tracking is
-  # post-0.1.0.
+  # post-0.1.0; v0.3.0's `:sparql_update` dispatch mode collapses
+  # the round-trips when the engine surface is present.
   #
   # ## Failure mode
   #
@@ -75,8 +89,29 @@ module Semantica
       decl = self.class.semantica_triples_declaration
       return unless decl
 
-      subject_term = TermSerializer.iri(instance_exec(&decl.subject_lambda))
-      decl.predicates.each do |pred|
+      semantica_emit_for_(decl.subject_lambda, decl.predicates)
+      decl.on_subject_blocks.each do |block|
+        semantica_emit_for_(block.subject_lambda, block.predicates)
+      end
+      true
+    end
+
+    def semantica_retract_triples!
+      decl = self.class.semantica_triples_declaration
+      return unless decl
+
+      semantica_retract_for_(decl.subject_lambda, decl.predicates)
+      decl.on_subject_blocks.each do |block|
+        semantica_retract_for_(block.subject_lambda, block.predicates)
+      end
+      true
+    end
+
+    private
+
+    def semantica_emit_for_(subject_lambda, predicates)
+      subject_term = TermSerializer.iri(instance_exec(&subject_lambda))
+      predicates.each do |pred|
         next if pred.if_lambda && !instance_exec(&pred.if_lambda)
         value = instance_exec(&pred.value_lambda)
         if value.nil?
@@ -89,21 +124,14 @@ module Semantica
           )
         end
       end
-      true
     end
 
-    def semantica_retract_triples!
-      decl = self.class.semantica_triples_declaration
-      return unless decl
-
-      subject_term = TermSerializer.iri(instance_exec(&decl.subject_lambda))
-      decl.predicates.each do |pred|
+    def semantica_retract_for_(subject_lambda, predicates)
+      subject_term = TermSerializer.iri(instance_exec(&subject_lambda))
+      predicates.each do |pred|
         retract_predicate!(subject_term, TermSerializer.predicate(pred.iri))
       end
-      true
     end
-
-    private
 
     def replace_predicate!(subject_term, predicate_term, new_object_term)
       retract_predicate!(subject_term, predicate_term)
@@ -139,9 +167,9 @@ module Semantica
 
     # ── DSL recorder ────────────────────────────────────────────
 
-    Declaration = Struct.new(:subject_lambda, :predicates) do
-      def initialize(subject_lambda:, predicates:)
-        super(subject_lambda, predicates)
+    Declaration = Struct.new(:subject_lambda, :predicates, :on_subject_blocks) do
+      def initialize(subject_lambda:, predicates:, on_subject_blocks: [])
+        super(subject_lambda, predicates, on_subject_blocks)
       end
     end
 
@@ -151,26 +179,77 @@ module Semantica
       end
     end
 
+    OnSubjectBlock = Struct.new(:subject_lambda, :predicates) do
+      def initialize(subject_lambda:, predicates:)
+        super(subject_lambda, predicates)
+      end
+    end
+
+    # Shared triple-recording between the top-level Recorder and the
+    # SubRecorder used inside `on_subject` blocks. Both maintain a
+    # `@predicates` array; `triple` appends to it.
+    module TripleRecording
+      # triple "schema:name", -> { name }
+      # triple "schema:gtin", -> { gtin }, if: -> { gtin.present? }
+      # triple "rdf:type",    "<urn:mm:CategoryFolder>"          # literal value
+      def triple(iri, value_or_lambda, **opts)
+        @predicates << Predicate.new(
+          iri: iri,
+          value_lambda: as_callable(value_or_lambda),
+          if_lambda: opts[:if],
+        )
+      end
+
+      # Wrap a literal value in a lambda so the emission path stays
+      # uniform. Callables (Procs, lambdas) pass through.
+      def as_callable(value_or_lambda)
+        if value_or_lambda.respond_to?(:call)
+          value_or_lambda
+        else
+          captured = value_or_lambda
+          -> { captured }
+        end
+      end
+    end
+
+    class SubRecorder
+      include TripleRecording
+
+      attr_reader :predicates
+
+      def initialize
+        @predicates = []
+      end
+    end
+
     class Recorder
+      include TripleRecording
+
       def initialize
         @subject_lambda = nil
         @predicates = []
+        @on_subject_blocks = []
       end
 
       # subject -> { "urn:mm:product:#{sku}" }
-      # or
       # subject { "urn:mm:product:#{sku}" }
       def subject(callable = nil, &block)
         @subject_lambda = callable || block
       end
 
-      # triple "schema:name", -> { name }
-      # triple "schema:gtin", -> { gtin }, if: -> { gtin.present? }
-      def triple(iri, value_lambda, **opts)
-        @predicates << Predicate.new(
-          iri: iri,
-          value_lambda: value_lambda,
-          if_lambda: opts[:if],
+      # on_subject -> { "urn:mm:folder:category:#{category}" } do
+      #   triple "rdf:type",    "<urn:mm:CategoryFolder>"
+      #   triple "schema:name", -> { category.titleize }
+      # end
+      def on_subject(subject_callable, &predicates_block)
+        raise ArgumentError, "on_subject requires a predicates block" unless predicates_block
+        raise ArgumentError, "on_subject requires a subject lambda" unless subject_callable
+
+        sub = SubRecorder.new
+        sub.instance_eval(&predicates_block)
+        @on_subject_blocks << OnSubjectBlock.new(
+          subject_lambda: subject_callable,
+          predicates: sub.predicates.freeze,
         )
       end
 
@@ -179,6 +258,7 @@ module Semantica
         Declaration.new(
           subject_lambda: @subject_lambda,
           predicates: @predicates.freeze,
+          on_subject_blocks: @on_subject_blocks.freeze,
         ).freeze
       end
     end

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.2.0 — (unreleased)
+
+PLAN_0.2.0 Phase A — `on_subject` sub-blocks + literal-string predicate values.
+
+- `Recorder#on_subject(subject_callable, &predicates_block)` declares
+  a secondary subject IRI emitted alongside the primary subject in
+  every `after_save`; retracted alongside in every `after_destroy`.
+  Nested predicates use the same `triple` DSL (lambdas, `if:`
+  guards, or literal-string predicate values).
+- `triple "rdf:type", "<urn:mm:CategoryFolder>"` — literal-string
+  values now pass through (wrapped internally into a constant
+  lambda). `TermSerializer.object` already detects `<...>`-wrapped
+  strings and emits them as IRI objects, so this just works.
+- `Declaration` gains `on_subject_blocks: Array<OnSubjectBlock>` (default `[]`).
+- Lifecycle paths split into `semantica_emit_for_(subject_lambda,
+  predicates)` and `semantica_retract_for_(subject_lambda,
+  predicates)` so they iterate primary then each block; both share
+  the same read-replace-per-predicate idempotency contract from v0.1.0.
+- 7 new specs (50 total, up from 43): 4 pure-Ruby recorder cases
+  (on_subject capture, literal-string wrapping, ArgumentError on
+  missing block / missing subject) + 3 live-engine lifecycle cases
+  (primary + derived emit on create; both retract on destroy;
+  literal-string predicate serializes as IRI).
+
 ## 0.1.0 — 2026-05-19 (unreleased)
 
 PLAN_0.1.0 Phase G + H — pre-release check + docs accuracy.

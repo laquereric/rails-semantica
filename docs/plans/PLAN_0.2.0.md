@@ -16,7 +16,19 @@
 | `PLAN_0.1.0.md` | `./docs/plans/PLAN_0.1.0.md` | Closed shipping state v0.2.0 evolves from. v0.1.0's `Storable` read-replace model is the baseline; #2 + #3 rework it. |
 | MM's `PLAN_0_29_1` Phase B.2 | `magentic-market-ai/docs/plans/PLAN_0_29_1.md` | The substrate-side cutover that consumes v0.2.0. Phase B.2 references this plan's eventual release SHA. |
 
-## Current state (2026-05-19)
+## Current state
+
+**Phase A landed** (multi-subject emission): `Recorder` records
+`on_subject` blocks alongside primary subject + predicates;
+`Declaration#on_subject_blocks` field added (default `[]`); lifecycle
+hooks iterate primary then each block with the same read-replace
+idempotency. Literal-string predicate values (`triple "rdf:type",
+"<urn:mm:CategoryFolder>"`) supported via TripleRecording's
+`as_callable` wrap. 7 new specs land; 50 total green via `bin/check`.
+
+Phases B (collection iteration + multi-value), C (JSON literals), F
+(specs), G (docs) still open. D + E are pointers to PLAN_0.5.0 +
+PLAN_0.4.0 respectively.
 
 Shipped at v0.1.0:
 
