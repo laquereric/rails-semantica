@@ -64,6 +64,67 @@ module Semantica
   module Storable
     extend ActiveSupport::Concern
 
+    # PLAN_0.3.0 Phase B + C — dispatch-mode ladder.
+    #
+    # Three lifecycle implementations:
+    #
+    #   :sparql_update — engine ≥ 0.5.0 (`sparql_update` scalar
+    #                    present). Each predicate replacement is a
+    #                    single DELETE/INSERT WHERE round-trip.
+    #   :bulk          — engine ≥ 0.4.0 (`rdf_insert_many` present,
+    #                    no `sparql_update`). PLAN_0.4.0 fills in the
+    #                    actual implementation; until then this rung
+    #                    of the ladder falls through to :per_call.
+    #   :per_call      — v0.2.0 baseline. SELECT + DELETE DATA + INSERT
+    #                    DATA per predicate, one round-trip each.
+    #
+    # Operators force a mode via `MM_SEMANTICA_DISPATCH_MODE=...` for
+    # predictable behaviour across upgrades. The probe runs once on
+    # first call + caches; reset via `dispatch_mode_reset!` (specs).
+    ENV_DISPATCH_MODE = "MM_SEMANTICA_DISPATCH_MODE"
+
+    DISPATCH_MODES = [:sparql_update, :bulk, :per_call].freeze
+
+    class << self
+      def dispatch_mode
+        @dispatch_mode ||= detect_dispatch_mode
+      end
+
+      def dispatch_mode_reset!
+        @dispatch_mode = nil
+      end
+
+      private
+
+      def detect_dispatch_mode
+        forced = ENV[ENV_DISPATCH_MODE]
+        if forced && !forced.empty?
+          sym = forced.to_sym
+          return sym if DISPATCH_MODES.include?(sym)
+        end
+
+        return :per_call unless defined?(::ActiveRecord::Base)
+
+        begin
+          ::Semantica::Loader.ensure_extension_loaded!
+          connection = ::ActiveRecord::Base.connection
+          # Probe: a no-op SPARQL UPDATE. Engine returns 0 on success;
+          # "no such function" surfaces from SQLite when the scalar
+          # isn't registered (pre-0.5.0 engine). Anything else means
+          # the function exists — even a parse error proves it.
+          connection.select_value(
+            "SELECT sparql_update(#{connection.quote('CLEAR SILENT GRAPH <urn:semantica:dispatch-probe>')})",
+          )
+          :sparql_update
+        rescue ::ActiveRecord::StatementInvalid => e
+          return :per_call if e.message.to_s.downcase.include?("no such function")
+          :sparql_update
+        rescue StandardError
+          :per_call
+        end
+      end
+    end
+
     included do
       class_attribute :semantica_triples_declaration, instance_accessor: false
     end
@@ -163,54 +224,36 @@ module Semantica
 
       buffer = collect_each_predicates_(collection, each_block)
 
-      resolved = []
+      by_predicate = Hash.new { |h, k| h[k] = [] }
       buffer.each do |pred|
         next if pred.if_lambda && !instance_exec(&pred.if_lambda)
         value = instance_exec(&pred.value_lambda)
         next if value.nil?
-        resolved << [pred.iri, TermSerializer.object(value)]
+        by_predicate[pred.iri] << TermSerializer.object(value)
       end
 
-      unique_predicates = resolved.map(&:first).uniq
-      unique_predicates.each do |iri|
-        predicate_term = TermSerializer.predicate(iri)
-        del = ::Semantica::Sparql.execute(
-          "DELETE WHERE { #{subject_term} #{predicate_term} ?o }",
-          graph: graph,
+      by_predicate.each do |iri, new_object_terms|
+        replace_predicate_set!(
+          subject_term,
+          TermSerializer.predicate(iri),
+          new_object_terms,
+          graph,
         )
-        raise_if_strict(del, "DELETE WHERE #{predicate_term}")
       end
-
-      return if resolved.empty?
-
-      # NT parser requires newline-separated triples; space-separated
-      # bodies only parse the first triple. Confirmed by spec failures
-      # in Phase B's first run.
-      body = resolved.map { |iri, obj|
-        "#{subject_term} #{TermSerializer.predicate(iri)} #{obj} ."
-      }.join("\n")
-      ins = ::Semantica::Sparql.execute("INSERT DATA { #{body} }", graph: graph)
-      raise_if_strict(ins, "INSERT DATA each_block")
     end
 
     # Destroy-path counterpart. Walks the collection one last time to
-    # enumerate the predicate set; retracts each via DELETE WHERE.
-    # If the collection is empty at destroy time, no retraction fires —
-    # stale triples from prior saves survive. Same limitation as emit.
+    # enumerate the predicate set; retracts each via dispatch-mode's
+    # retract helper. If the collection is empty at destroy time, no
+    # retraction fires — stale triples from prior saves survive.
     def semantica_retract_each_block_(subject_lambda, each_block, graph = nil)
       subject_term = TermSerializer.iri(instance_exec(&subject_lambda))
       collection = instance_exec(&each_block.collection_lambda)
       return if collection.nil? || (collection.respond_to?(:empty?) && collection.empty?)
 
       buffer = collect_each_predicates_(collection, each_block)
-      unique_predicates = buffer.map(&:iri).uniq
-      unique_predicates.each do |iri|
-        predicate_term = TermSerializer.predicate(iri)
-        del = ::Semantica::Sparql.execute(
-          "DELETE WHERE { #{subject_term} #{predicate_term} ?o }",
-          graph: graph,
-        )
-        raise_if_strict(del, "DELETE WHERE #{predicate_term}")
+      buffer.map(&:iri).uniq.each do |iri|
+        retract_predicate!(subject_term, TermSerializer.predicate(iri), graph)
       end
     end
 
@@ -226,18 +269,77 @@ module Semantica
     end
 
     def replace_predicate!(subject_term, predicate_term, new_object_term, graph = nil)
-      retract_predicate!(subject_term, predicate_term, graph)
-      result = ::Semantica::Sparql.execute(
-        "INSERT DATA { #{subject_term} #{predicate_term} #{new_object_term} . }",
-        graph: graph,
-      )
-      raise_if_strict(result, "INSERT DATA #{predicate_term}")
-      result
+      replace_predicate_set!(subject_term, predicate_term, [new_object_term], graph)
     end
 
     def retract_predicate!(subject_term, predicate_term, graph = nil)
+      case ::Semantica::Storable.dispatch_mode
+      when :sparql_update
+        retract_predicate_via_update!(subject_term, predicate_term, graph)
+      else
+        # :bulk falls through to :per_call until PLAN_0.4.0
+        retract_predicate_per_call!(subject_term, predicate_term, graph)
+      end
+    end
+
+    # PLAN_0.3.0 Phase B — replace a (subject, predicate) slot with
+    # a (possibly multi-value) set of new object terms in one engine
+    # round-trip when sparql_update is available; otherwise fall
+    # back to the per-call SELECT+DELETE+INSERT path.
+    def replace_predicate_set!(subject_term, predicate_term, new_object_terms, graph = nil)
+      case ::Semantica::Storable.dispatch_mode
+      when :sparql_update
+        replace_predicate_set_via_update!(subject_term, predicate_term, new_object_terms, graph)
+      else
+        # :bulk falls through to :per_call until PLAN_0.4.0
+        replace_predicate_set_per_call!(subject_term, predicate_term, new_object_terms, graph)
+      end
+    end
+
+    def replace_predicate_set_via_update!(s, p, new_objects, graph)
+      insert_clause =
+        if new_objects.empty?
+          ""
+        else
+          new_objects.map { |o| "#{s} #{p} #{o} ." }.join(" ")
+        end
+
+      update =
+        if insert_clause.empty?
+          "DELETE { #{s} #{p} ?o } WHERE { #{s} #{p} ?o }"
+        else
+          "DELETE { #{s} #{p} ?o }\n" \
+            "INSERT { #{insert_clause} }\n" \
+            "WHERE  { OPTIONAL { #{s} #{p} ?o } }"
+        end
+
+      result = ::Semantica::Sparql.execute(update, graph: graph)
+      raise_if_strict(result, "DELETE/INSERT WHERE #{p}")
+      result
+    end
+
+    def replace_predicate_set_per_call!(s, p, new_objects, graph)
+      retract_predicate_per_call!(s, p, graph)
+      return { ok: true, count: 0 } if new_objects.empty?
+
+      body = new_objects.map { |o| "#{s} #{p} #{o} ." }.join("\n")
+      result = ::Semantica::Sparql.execute("INSERT DATA { #{body} }", graph: graph)
+      raise_if_strict(result, "INSERT DATA #{p}")
+      result
+    end
+
+    def retract_predicate_via_update!(s, p, graph)
+      result = ::Semantica::Sparql.execute(
+        "DELETE { #{s} #{p} ?o } WHERE { #{s} #{p} ?o }",
+        graph: graph,
+      )
+      raise_if_strict(result, "DELETE WHERE #{p}")
+      result
+    end
+
+    def retract_predicate_per_call!(s, p, graph)
       current = ::Semantica::Sparql.select(
-        "SELECT ?o WHERE { #{subject_term} #{predicate_term} ?o }",
+        "SELECT ?o WHERE { #{s} #{p} ?o }",
         graph: graph,
       )
       return current unless current[:ok]
@@ -246,10 +348,10 @@ module Semantica
         old_o = row["o"]
         next if old_o.nil? || old_o.empty?
         del = ::Semantica::Sparql.execute(
-          "DELETE DATA { #{subject_term} #{predicate_term} #{old_o} . }",
+          "DELETE DATA { #{s} #{p} #{old_o} . }",
           graph: graph,
         )
-        raise_if_strict(del, "DELETE DATA #{predicate_term}")
+        raise_if_strict(del, "DELETE DATA #{p}")
       end
       current
     end

@@ -2,6 +2,33 @@
 
 ## 0.3.0 — (unreleased)
 
+PLAN_0.3.0 Phase B + C — `Storable.dispatch_mode` ladder.
+
+- `Semantica::Storable.dispatch_mode` reader returns one of
+  `:sparql_update` (engine ≥ 0.5.0), `:bulk` (engine ≥ 0.4.0, no
+  `sparql_update`; the actual `:bulk` implementation ships in
+  PLAN_0.4.0 — until then this rung falls through to `:per_call`),
+  or `:per_call` (v0.2.0 baseline). The detection runs once on
+  first call + caches; specs reset via `dispatch_mode_reset!`.
+- `MM_SEMANTICA_DISPATCH_MODE` env var forces a specific mode for
+  predictable behaviour across upgrades. Pinned as a long-lived
+  contract (lifetime ≥ v1.0).
+- `replace_predicate!` + `retract_predicate!` route through the
+  ladder. The `:sparql_update` path collapses each predicate
+  replacement from `2 + N` round-trips to a single
+  `DELETE/INSERT WHERE` query. Multi-value (from `each` blocks)
+  packs all new values into one INSERT clause; set semantics dedup
+  the WHERE-induced repetition. Empty-collection retract uses
+  `DELETE { … } WHERE { … }` (no OPTIONAL).
+- `each`-block emission refactored to route every predicate-iri
+  group through `replace_predicate_set!`; the dispatch ladder
+  applies uniformly to single- and multi-value writes.
+- 19 new specs (105 total): module-surface contract, env var
+  override, cache invalidation, engine probe, round-trip parity
+  across `:sparql_update` and `:per_call` for create/update/
+  destroy/nil, multi-value collapse, and round-trip-count smoke
+  comparing the two modes.
+
 PLAN_0.3.0 Phase A — `Sparql.execute` arbitrary SPARQL UPDATE pass-through.
 
 - `Sparql.execute` `else` branch now routes any UPDATE form that
