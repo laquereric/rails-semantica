@@ -68,6 +68,67 @@ product.destroy
 # After destroy: rdf_delete(subject, p, o) for every declared triple
 ```
 
+### Multi-subject emission — `on_subject` (v0.2.0)
+
+```ruby
+class Product < ApplicationRecord
+  include Semantica::Storable
+
+  triples do
+    subject -> { "urn:mm:product:#{sku}" }
+    triple "schema:name", -> { name }
+
+    on_subject -> { "urn:mm:folder:category:#{category}" } do
+      triple "rdf:type", "<urn:mm:CategoryFolder>"
+      triple "schema:name", -> { category.titleize }
+    end
+  end
+end
+```
+
+Each `on_subject` block emits alongside the primary subject; both
+share the same read-replace per (subject, predicate) idempotency.
+Literal-string predicate values (`"<urn:…>"`-wrapped) serialize as
+IRI objects.
+
+### Collection iteration + multi-value predicates — `each` (v0.2.0)
+
+```ruby
+triples do
+  subject -> { "urn:mm:product:#{sku}" }
+
+  each -> { product_specs } do |spec|
+    triple "mm:#{spec.name.camelize(:lower)}", -> { spec.value }
+  end
+
+  # Multi-value via repeated each (same predicate, N values):
+  each -> { feature_flags } do |feature|
+    triple "mm:hasFeature", -> { feature.code }
+  end
+end
+```
+
+The predicate IRI may interpolate per-item state. Read-replace
+adjusts: every triple matching (subject, predicate) for every
+predicate the block emits this save is retracted before insert.
+Empty collection this save → no retraction → stale triples from a
+prior non-empty save persist; pair with explicit
+`Sparql.execute("DELETE WHERE { <s> <p> ?o }")` if strict cleanup is
+required.
+
+### JSON / structured-literal object types (v0.2.0)
+
+```ruby
+triples do
+  subject -> { "urn:mm:product:#{sku}" }
+  triple "schema:offers", -> { { price: price_cents/100.0, currency: "USD" } }
+end
+```
+
+`Hash` and `Array` values JSON-encode via `JSON.generate` and emit
+as typed literals with `xsd:string` datatype. Read back via
+`Sparql.select` + `JSON.parse` on the literal value.
+
 ```ruby
 # SPARQL queries (structured envelopes; never raise):
 Semantica::Sparql.select(<<~SPARQL)
@@ -85,13 +146,19 @@ SPARQL
 # => { ok: true, ntriples: "<urn:mm:product:EPET2850> <derived:hot> true .\n..." }
 
 # Write surface — INSERT DATA / DELETE DATA / CLEAR ALL.
-# Arbitrary SPARQL UPDATE is post-0.1.0; reach for the scalar
-# functions (rdf_insert / rdf_delete / etc.) directly if you need
-# more. Storable's lifecycle hooks use the two DATA forms below.
+# v0.2.0 also recognises `DELETE WHERE { <s> <p> ?o }` as a public
+# form (read-replace by predicate). Arbitrary SPARQL UPDATE remains
+# post-v0.2.0; reach for the scalar functions (rdf_insert /
+# rdf_delete / etc.) directly if you need more.
 Semantica::Sparql.execute(<<~SPARQL)
   INSERT DATA { <urn:mm:product:EPET2850> <schema:tag> "hot" . }
 SPARQL
 # => { ok: true, count: 1 }
+
+Semantica::Sparql.execute(<<~SPARQL)
+  DELETE WHERE { <urn:mm:product:EPET2850> <schema:tag> ?o }
+SPARQL
+# => { ok: true, count: <integer> }
 ```
 
 Failure envelopes carry a verbatim because-clause:
@@ -116,7 +183,7 @@ discipline: every refusal carries `{ ok: false, reason:, because: }`
 verbatim because-clauses (Architect's-No #18). Operators branch on
 `result[:ok]` rather than rescuing.
 
-## What's stable at v0.1.0 vs. still mutable
+## What's stable vs. still mutable
 
 **Pinned at v0.1.0** (renames or removals will earn a CHANGELOG
 heading + a coordinated substrate bump):
@@ -126,6 +193,14 @@ heading + a coordinated substrate bump):
 - `Semantica::Loader.{ensure_extension_loaded!,extension_path,searched_paths}` surface + `ExtensionMissing` class.
 - `MM_SQLITE_SPARQL_PATH` env var.
 - N-Triples object encoding from `TermSerializer` (String/Integer/Float/Boolean/Time/Date type-dispatch).
+
+**Pinned at v0.2.0** (additive on top of v0.1.0):
+
+- `triples do; on_subject(lambda) do; … end; end` DSL block.
+- `triples do; each(collection_lambda) do |item|; triple "pred", ->{...}; end; end` DSL block; predicate may be String or lambda.
+- `triple "pred", "<urn:literal-iri>"` literal-string second arg.
+- `TermSerializer.object(Hash | Array)` → JSON-encoded `xsd:string` literal.
+- `Semantica::Sparql.execute("DELETE WHERE { <s> <p> ?o }")` envelope `{ ok:, count: }`.
 
 **Still operator-fluid** (may change without deprecation cycle
 during v0.x.x):
@@ -160,6 +235,8 @@ isn't on disk.
 
 - [`docs/plans/PLAN_0.1.0.md`](docs/plans/PLAN_0.1.0.md) — this gem's
   own roadmap to a shippable 0.1.0.
+- [`docs/plans/PLAN_0.2.0.md`](docs/plans/PLAN_0.2.0.md) — the v0.2.0
+  DSL extensions (multi-subject, each blocks, JSON literals).
 - [`vendor/sqlite-sparql/README.md`](../sqlite-sparql/README.md) — the
   Rust SQLite extension this gem wraps.
 - [`docs/research/Semantica.md`](../../docs/research/Semantica.md) — the

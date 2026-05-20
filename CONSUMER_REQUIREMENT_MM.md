@@ -65,16 +65,16 @@ Semantica::Sparql.construct(query_string)
 Semantica::Sparql.execute(update_query_string)
 # => { ok: true,  count: <integer> }
 # => { ok: false, reason: <symbol>, because: <string> }
-# v0.1.0 supports INSERT DATA / DELETE DATA / CLEAR ALL forms; arbitrary
-# SPARQL UPDATE is post-v0.2.0 (depends on engine sparql_update — see
-# rails-semantica/docs/plans/PLAN_0.2.0.md and the engine's
-# CONSUMER_REQUIREMENT_RS.md).
+# v0.1.0 supports INSERT DATA / DELETE DATA / CLEAR ALL forms.
+# v0.2.0 adds DELETE WHERE { <s> <p> ?o } (read-replace by predicate).
+# Arbitrary SPARQL UPDATE is post-v0.2.0 (ships as PLAN_0.3.0 against
+# engine sparql_update — see rails-semantica/docs/plans/PLAN_0.3.0.md
+# and the engine's CONSUMER_REQUIREMENT_RS.md).
 ```
 
 Pinned `:reason` symbols (v0.1.0): `:sparql_parse_error`,
 `:extension_not_loaded`, `:ar_connection_error`, `:unexpected_error`.
-v0.2.0 Phase D adds `:engine_unsupported` (for `graph:` calls before the
-engine ships named-graph support).
+v0.5.0 (named-graph) adds `:invalid_graph` and `:invalid_dsl`; see §5.
 
 Envelope-shape stability MM depends on:
 
@@ -172,12 +172,12 @@ hybrid is explicitly interim — when v0.2.0 ships these extensions,
 that substrate-side method is deleted + the logic inlines into the
 `triples do…end` block.
 
-### 1. Multi-subject emission
+### 1. Multi-subject emission — **SHIPPED (PLAN_0.2.0 Phase A, v0.2.0)**
 
 MM's product projection emits triples on derived URIs in addition to
 the primary record URI. Example: a `Product` save also emits triples
 on the category-folder URI (`urn:mm:folder:category:printer`)
-declaring its `rdf:type` + `schema:name`. Proposed DSL:
+declaring its `rdf:type` + `schema:name`. Shipped DSL:
 
 ```ruby
 triples do
@@ -193,12 +193,14 @@ end
 
 Semantics: each `on_subject` block runs after the primary subject's
 emissions; the same read-replace per (subject, predicate) idempotency
-applies; `after_destroy` retracts every block's emissions.
+applies; `after_destroy` retracts every block's emissions. Literal-
+string predicate values (`"<urn:…>"`-wrapped) serialize as IRI
+objects without a lambda wrapper.
 
-### 2. Variable-cardinality emission via collection iteration
+### 2. Variable-cardinality emission via collection iteration — **SHIPPED (PLAN_0.2.0 Phase B, v0.2.0)**
 
 MM's product projection emits one triple per `product.product_specs`
-row. The collection's size varies per record. Proposed DSL:
+row. The collection's size varies per record. Shipped DSL:
 
 ```ruby
 triples do
@@ -211,33 +213,31 @@ end
 ```
 
 Semantics: on `after_save`, the gem walks the collection at save time
-+ emits one triple per element. Read-replace must adjust per #3.
++ emits one triple per element. Read-replace adjusts per #3.
+Limitation pinned at v0.2.0: an empty collection this save does not
+retract triples emitted by a prior non-empty save; operators pair
+with explicit `Sparql.execute("DELETE WHERE { <s> <p> ?o }")` when
+strict cleanup is required.
 
-### 3. Multi-value predicates
+### 3. Multi-value predicates — **SHIPPED (PLAN_0.2.0 Phase B, v0.2.0)**
 
 MM's `hasFeature` predicate fires once per feature flag present on a
-`Product`. Storable v0.1.0's read-replace assumes one value per
-(subject, predicate); the new model must allow multiple. Proposed
-semantics: when a `triple` declaration is inside an `each` block,
-multiple values under the same predicate are emitted as separate
+`Product`. Storable v0.1.0's read-replace assumed one value per
+(subject, predicate); v0.2.0 allows multiple inside an `each` block.
+Semantics: multiple values under the same predicate emit as separate
 triples; read-replace becomes "delete every triple matching (subject,
 predicate); insert all new values."
 
-### 4. JSON literal / structured-literal object type
+### 4. JSON literal / structured-literal object type — **SHIPPED (PLAN_0.2.0 Phase C, v0.2.0)**
 
-MM's `schema:offers` triple packs a 3-field hash into a JSON string
-literal. Storable v0.1.0's `TermSerializer.object` dispatches by Ruby
-type — `Hash` falls through to the default branch's `value.to_s`,
-producing `"{:key=>...}"`, not JSON. Either:
-
-- Extend `TermSerializer.object` to JSON-encode `Hash` and `Array`, or
-- Expose an opt-in syntax:
-
-  ```ruby
-  triple "schema:offers", -> { { price: price_cents/100.0, ... } }, as: :json
-  ```
-
-Either landing is acceptable; clarity is the only constraint.
+MM's `schema:offers` triple packs a multi-field hash into a JSON
+string literal. `TermSerializer.object` grows `when Hash, Array`
+branches: values JSON-encode via `JSON.generate` and emit as typed
+literals with `xsd:string` datatype. Operators read back via
+`Sparql.select` + `JSON.parse` on the literal value. The opt-in
+`as: :json` syntax was rejected as over-engineering; if a real need
+surfaces for a Hash-as-stringified-Hash literal, a v0.2.x bump can
+add it.
 
 ### 5. Named graph parameter — **SHIPPED (PLAN_0.5.0)**
 

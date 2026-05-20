@@ -18,6 +18,12 @@
 
 ## Current state
 
+**Released as v0.2.0 (2026-05-20).** VERSION bumped to `0.2.0`;
+CHANGELOG `0.2.0` heading dropped `(unreleased)`; README DSL
+section grew the `on_subject`, `each`, and JSON-literal examples;
+CONSUMER_REQUIREMENT_MM.md items #1–#4 graduated inline to
+"SHIPPED" status.
+
 **Phases A + B + C landed.**
 
 - **Phase A** (multi-subject emission): `on_subject` blocks; literal-

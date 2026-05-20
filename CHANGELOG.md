@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.2.0 — (unreleased)
+## 0.2.0 — 2026-05-20
+
+Closes PLAN_0.2.0 (multi-subject emission, collection iteration +
+multi-value predicates, JSON / structured-literal object types).
+Phase D (named graphs) moved to PLAN_0.5.0; Phase E (bulk write)
+moved to PLAN_0.4.0; both ship under their own gem versions.
+
+CONSUMER_REQUIREMENT_MM.md items #1–#4 graduate to "Surfaces MM
+consumes" inline.
 
 PLAN_0.2.0 Phase C — JSON / structured-literal object types.
 
