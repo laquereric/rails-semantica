@@ -199,59 +199,23 @@ v0.2.x bump can add it.
   `after_save` + `Sparql.select` recovers a JSON-parseable string.
 - Spec: Array values serialize correctly + round-trip.
 
-### Phase D — Named graph support (extension #5) — engine-gated
+### Phase D — Named graph support (extension #5) — moved to PLAN_0.5.0
 
-**Cannot ship until `sqlite-sparql` exposes named-graph-aware
-insert/delete + graph-scoped query forms.** The engine's
-`CONSUMER_REQUIREMENT_MM.md` (the sibling repo's file) carries the
-upstream ask. Track engine readiness; this phase opens when the
-engine ships.
+**Scope moved.** Named-graph support (`Sparql` methods'
+`graph:` kwarg, `Storable`'s `graph "name"` DSL declaration,
+dispatch-mode threading) has its own canonical plan at
+[`./PLAN_0.5.0.md`](./PLAN_0.5.0.md). The engine prerequisite
+landed in `sqlite-sparql 0.3.0` (4-arg scalars + native SPARQL
+`FROM`/`GRAPH` routing); the gem-side surface ships as v0.5.0
+rather than as v0.2.0 Phase D. PLAN_0.5.0 pins the implementation
+against the engine's actual additive-scalar contract and the
+`Storable` dispatch-mode graph-equivalence requirement.
 
-#### When unblocked, the DSL becomes:
-
-```ruby
-triples do
-  graph "bhphoto"
-  subject -> { "urn:mm:product:#{sku}" }
-  # ...
-end
-
-Semantica::Sparql.select(query, graph: "bhphoto")
-Semantica::Sparql.ask(query, graph: "bhphoto")
-Semantica::Sparql.construct(query, graph: "bhphoto")
-Semantica::Sparql.execute("INSERT DATA { ... }", graph: "bhphoto")
-```
-
-#### Implementation sketch
-
-- `Recorder#graph(name)` records the graph IRI on the
-  `Declaration`. `Storable` lifecycle hooks rewrite the
-  `INSERT DATA` / `DELETE DATA` payloads to wrap in
-  `GRAPH <name> { ... }`.
-- `Sparql.{select,ask,construct,execute}` gain an optional
-  `graph:` kwarg. When passed, the query is rewritten or scoped to
-  the named graph via the engine's graph-aware functions.
-- `TermSerializer` gains nothing new — graph IRIs follow the same
-  IRI-wrapping rules as subjects/predicates.
-- v0.1.x callers that omit `graph:` keep the default-graph
-  behaviour (back-compat).
-
-#### Exit criteria
-
-- Spec: a model with `graph "bhphoto"` emits triples that are
-  retrievable via `Sparql.select(q, graph: "bhphoto")` but **not**
-  retrievable via the default-graph `select(q)`.
-- Spec: cross-graph round-trip with two models, two different
-  graphs, no cross-contamination.
-
-#### Blockers
-
-- Engine surface: `rdf_load_ntriples` doesn't accept a graph
-  arg. Engine must add either `rdf_load_ntriples_to_graph(text,
-  graph)` or a graph-aware INSERT path. Same for `rdf_delete` /
-  `sparql_query`.
-- Until the engine ships, Phase D ships an `:engine_unsupported`
-  refusal envelope when `graph:` is passed.
+v0.2.0's contract additions table still lists the `graph:` kwarg
+and `graph "..."` DSL for cross-reference, but the
+**implementation is v0.5.0's responsibility** — those rows
+graduate from pencilled-in into pinned surfaces when PLAN_0.5.0
+ships.
 
 ### Phase E — Bulk write surface (extension #6) — moved to PLAN_0.4.0
 
