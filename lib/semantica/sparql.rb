@@ -130,12 +130,12 @@ module Semantica
     # facade. The engine aborts the whole batch on any malformed
     # row; the gem mirrors that — no partial-success path. Empty
     # input returns `{ ok: true, inserted: 0 }` (or `:deleted: 0`).
-    def bulk_insert(rows)
-      bulk_write(rows, "rdf_insert_many", :inserted)
+    def bulk_insert(rows, raw: false)
+      bulk_write(rows, "rdf_insert_many", :inserted, raw: raw)
     end
 
-    def bulk_delete(rows)
-      bulk_write(rows, "rdf_delete_many", :deleted)
+    def bulk_delete(rows, raw: false)
+      bulk_write(rows, "rdf_delete_many", :deleted, raw: raw)
     end
 
     # PLAN_0.5.0 Phase A — validate graph IRIs at the gem boundary.
@@ -439,9 +439,14 @@ module Semantica
       # bulk_delete. Validates rows, runs each term through
       # TermSerializer, unwraps IRIs (engine wants bare), marshals
       # to JSON, single FFI crossing per batch.
-      def bulk_write(rows, fn_name, payload_key)
+      #
+      # raw: true skips term normalization — rows are passed through
+      # to the engine as-is. Used by Storable's :bulk dispatch path
+      # (PLAN_0.4.0 Phase B), which assembles already-engine-form
+      # rows from SELECT results.
+      def bulk_write(rows, fn_name, payload_key, raw:)
         with_extension do |connection|
-          normalized = normalize_bulk_rows(rows)
+          normalized = raw ? Array(rows) : normalize_bulk_rows(rows)
           if normalized.empty?
             { ok: true, payload_key => 0 }
           else

@@ -154,13 +154,15 @@ module Semantica
       decl = self.class.semantica_triples_declaration
       return unless decl
 
-      graph = decl.graph_iri
-      semantica_emit_for_(decl.subject_lambda, decl.predicates, graph)
-      decl.on_subject_blocks.each do |block|
-        semantica_emit_for_(block.subject_lambda, block.predicates, graph)
-      end
-      decl.each_blocks.each do |each_block|
-        semantica_emit_each_block_(decl.subject_lambda, each_block, graph)
+      with_bulk_buffer_if_bulk_mode_ do
+        graph = decl.graph_iri
+        semantica_emit_for_(decl.subject_lambda, decl.predicates, graph)
+        decl.on_subject_blocks.each do |block|
+          semantica_emit_for_(block.subject_lambda, block.predicates, graph)
+        end
+        decl.each_blocks.each do |each_block|
+          semantica_emit_each_block_(decl.subject_lambda, each_block, graph)
+        end
       end
       true
     end
@@ -169,13 +171,15 @@ module Semantica
       decl = self.class.semantica_triples_declaration
       return unless decl
 
-      graph = decl.graph_iri
-      semantica_retract_for_(decl.subject_lambda, decl.predicates, graph)
-      decl.on_subject_blocks.each do |block|
-        semantica_retract_for_(block.subject_lambda, block.predicates, graph)
-      end
-      decl.each_blocks.each do |each_block|
-        semantica_retract_each_block_(decl.subject_lambda, each_block, graph)
+      with_bulk_buffer_if_bulk_mode_ do
+        graph = decl.graph_iri
+        semantica_retract_for_(decl.subject_lambda, decl.predicates, graph)
+        decl.on_subject_blocks.each do |block|
+          semantica_retract_for_(block.subject_lambda, block.predicates, graph)
+        end
+        decl.each_blocks.each do |each_block|
+          semantica_retract_each_block_(decl.subject_lambda, each_block, graph)
+        end
       end
       true
     end
@@ -273,11 +277,15 @@ module Semantica
     end
 
     def retract_predicate!(subject_term, predicate_term, graph = nil)
+      if @semantica_bulk_buffer
+        @semantica_bulk_buffer.add(subject_term, predicate_term, [], graph)
+        return { ok: true }
+      end
+
       case ::Semantica::Storable.dispatch_mode
       when :sparql_update
         retract_predicate_via_update!(subject_term, predicate_term, graph)
       else
-        # :bulk falls through to :per_call until PLAN_0.4.0
         retract_predicate_per_call!(subject_term, predicate_term, graph)
       end
     end
@@ -286,13 +294,46 @@ module Semantica
     # a (possibly multi-value) set of new object terms in one engine
     # round-trip when sparql_update is available; otherwise fall
     # back to the per-call SELECT+DELETE+INSERT path.
+    #
+    # PLAN_0.4.0 Phase B — when an outer bulk buffer is active
+    # (:bulk dispatch mode), record into the buffer instead of
+    # executing; flush_emit! issues one bulk_delete + one
+    # bulk_insert at the end of the save.
     def replace_predicate_set!(subject_term, predicate_term, new_object_terms, graph = nil)
+      if @semantica_bulk_buffer
+        @semantica_bulk_buffer.add(subject_term, predicate_term, new_object_terms, graph)
+        return { ok: true }
+      end
+
       case ::Semantica::Storable.dispatch_mode
       when :sparql_update
         replace_predicate_set_via_update!(subject_term, predicate_term, new_object_terms, graph)
       else
-        # :bulk falls through to :per_call until PLAN_0.4.0
         replace_predicate_set_per_call!(subject_term, predicate_term, new_object_terms, graph)
+      end
+    end
+
+    # PLAN_0.4.0 Phase B — bulk-mode lifecycle wrapper. Captures
+    # replace/retract operations across primary + on_subject + each
+    # blocks; flushes via one combined bulk_delete (all current
+    # values for affected (s, p, graph) keys) + one combined
+    # bulk_insert (all new values). 2 + N round-trips per save where
+    # N = unique (s, p, graph) keys: the engine SELECT count
+    # dominates wall-clock for records with many predicates; the
+    # bulk_delete + bulk_insert are constant.
+    def with_bulk_buffer_if_bulk_mode_
+      if ::Semantica::Storable.dispatch_mode == :bulk
+        prior = @semantica_bulk_buffer
+        @semantica_bulk_buffer = BulkEmitBuffer.new
+        begin
+          yield
+          flush = @semantica_bulk_buffer.flush!
+          raise_if_strict(flush, "bulk flush") if flush.is_a?(Hash) && !flush[:ok]
+        ensure
+          @semantica_bulk_buffer = prior
+        end
+      else
+        yield
       end
     end
 
@@ -360,6 +401,90 @@ module Semantica
       return if envelope[:ok]
       return unless ENV["MM_SEMANTICA_STRICT"] == "1"
       raise "Semantica::Storable #{context} refused: #{envelope[:reason]} — #{envelope[:because]}"
+    end
+
+    # ── Bulk emit buffer (PLAN_0.4.0 Phase B) ───────────────────
+
+    # Captures replace/retract intents across a single save,
+    # flushes via one bulk_delete (current values) + one
+    # bulk_insert (new values). add(s_term, p_term, new_objs, graph)
+    # appends an entry; an entry with an empty new_objs array is a
+    # pure retract.
+    #
+    # Group key is (subject_term, predicate_term, graph) so that
+    # multiple adds to the same slot (e.g., from primary +
+    # on_subject blocks accidentally touching the same predicate)
+    # union their new objects.
+    class BulkEmitBuffer
+      Entry = Struct.new(:subject_term, :predicate_term, :new_objects, :graph) do
+        def key
+          [subject_term, predicate_term, graph]
+        end
+      end
+
+      def initialize
+        @entries = []
+      end
+
+      def add(subject_term, predicate_term, new_object_terms, graph)
+        @entries << Entry.new(subject_term, predicate_term, new_object_terms.dup, graph)
+      end
+
+      def flush!
+        return { ok: true } if @entries.empty?
+
+        grouped = Hash.new { |h, k| h[k] = [] }
+        @entries.each { |e| grouped[e.key].concat(e.new_objects) }
+
+        delete_rows = []
+        grouped.each_key do |(s_term, p_term, graph)|
+          current = ::Semantica::Sparql.select(
+            "SELECT ?o WHERE { #{s_term} #{p_term} ?o }",
+            graph: graph,
+          )
+          next unless current[:ok]
+          current[:results].each do |row|
+            o_raw = row["o"]
+            next if o_raw.nil? || o_raw.empty?
+            delete_rows << build_row_(s_term, p_term, o_raw, graph)
+          end
+        end
+
+        insert_rows = []
+        grouped.each do |(s_term, p_term, graph), new_objects|
+          new_objects.each do |o_term|
+            insert_rows << build_row_(s_term, p_term, o_term, graph)
+          end
+        end
+
+        unless delete_rows.empty?
+          del = ::Semantica::Sparql.bulk_delete(delete_rows, raw: true)
+          return del unless del[:ok]
+        end
+        unless insert_rows.empty?
+          ins = ::Semantica::Sparql.bulk_insert(insert_rows, raw: true)
+          return ins unless ins[:ok]
+        end
+        { ok: true }
+      end
+
+      private
+
+      def build_row_(s_term, p_term, o_term, graph)
+        s_bare = bare_(s_term)
+        p_bare = bare_(p_term)
+        o_engine = o_term.start_with?("<") ? bare_(o_term) : o_term
+        if graph
+          [s_bare, p_bare, o_engine, graph]
+        else
+          [s_bare, p_bare, o_engine]
+        end
+      end
+
+      def bare_(term)
+        return term unless term.is_a?(String) && term.start_with?("<") && term.end_with?(">")
+        term[1..-2]
+      end
     end
 
     # ── DSL recorder ────────────────────────────────────────────

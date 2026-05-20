@@ -2,6 +2,30 @@
 
 ## 0.4.0 — (unreleased)
 
+PLAN_0.4.0 Phase B — `Storable.dispatch_mode == :bulk` implementation.
+
+- The `:bulk` rung of the dispatch ladder (declared but stubbed in
+  PLAN_0.3.0 Phase B) is now live. Lifecycle hooks capture all
+  replace/retract intents during emission via an internal
+  `BulkEmitBuffer`; on flush, one `Sparql.bulk_delete` (current
+  values for affected (s, p, graph) keys) + one `Sparql.bulk_insert`
+  (all new values) per save — 2 + N round-trips where N is the
+  number of unique (subject, predicate, graph) keys touched
+  (the SELECTs for current-value enumeration).
+- `Sparql.bulk_insert` / `Sparql.bulk_delete` grow a `raw:` kwarg
+  (default `false`). When `true`, rows skip `TermSerializer`
+  normalization — used by `Storable`'s `:bulk` path which assembles
+  already-engine-form rows from SELECT results.
+- `replace_predicate_set!` / `retract_predicate!` now redirect into
+  the bulk buffer when one is active on the instance; otherwise
+  route through the existing `:sparql_update` / `:per_call`
+  branches. on_subject + each blocks compose under the buffer with
+  no special-casing.
+- 6 new specs (123 total): dispatch-mode parity loop grows the
+  `:bulk` case (create / update / destroy / nil); two
+  round-trip-count smokes pin `:bulk` at exactly 1 `bulk_insert` on
+  create and 1+1 on update regardless of predicate count.
+
 PLAN_0.4.0 Phase A — `Sparql.bulk_insert` / `Sparql.bulk_delete` facade.
 
 - Two new public methods on `Semantica::Sparql`. Accept rows as

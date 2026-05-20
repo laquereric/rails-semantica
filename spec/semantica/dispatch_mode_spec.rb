@@ -107,7 +107,7 @@ RSpec.describe "Semantica::Storable dispatch_mode" do
       Semantica::Storable.dispatch_mode_reset!
     end
 
-    %w[sparql_update per_call].each do |mode|
+    %w[sparql_update bulk per_call].each do |mode|
       context "in :#{mode} mode" do
         before do
           ENV[Semantica::Storable::ENV_DISPATCH_MODE] = mode
@@ -279,6 +279,52 @@ RSpec.describe "Semantica::Storable dispatch_mode" do
       end
       # 2 declared predicates → ≤ 2 execute calls.
       expect(count).to be <= 2
+    end
+
+    it ":bulk issues exactly 2 bulk calls per save regardless of predicate count" do
+      ENV[Semantica::Storable::ENV_DISPATCH_MODE] = "bulk"
+      Semantica::Storable.dispatch_mode_reset!
+
+      bulk_insert_calls = 0
+      bulk_delete_calls = 0
+      allow(Semantica::Sparql).to receive(:bulk_insert).and_wrap_original do |orig, *a, **kw|
+        bulk_insert_calls += 1
+        orig.call(*a, **kw)
+      end
+      allow(Semantica::Sparql).to receive(:bulk_delete).and_wrap_original do |orig, *a, **kw|
+        bulk_delete_calls += 1
+        orig.call(*a, **kw)
+      end
+
+      DispatchCounter.create!(sku: "C3", name: "Third", price: 300)
+
+      # Create case: 2 predicates, no current values, so bulk_delete
+      # is skipped (delete_rows empty). 1 bulk_insert total.
+      expect(bulk_insert_calls).to eq(1)
+      expect(bulk_delete_calls).to eq(0)
+    end
+
+    it ":bulk update issues 1 bulk_delete + 1 bulk_insert (constant)" do
+      ENV[Semantica::Storable::ENV_DISPATCH_MODE] = "bulk"
+      Semantica::Storable.dispatch_mode_reset!
+
+      w = DispatchCounter.create!(sku: "C4", name: "Fourth", price: 400)
+
+      bulk_insert_calls = 0
+      bulk_delete_calls = 0
+      allow(Semantica::Sparql).to receive(:bulk_insert).and_wrap_original do |orig, *a, **kw|
+        bulk_insert_calls += 1
+        orig.call(*a, **kw)
+      end
+      allow(Semantica::Sparql).to receive(:bulk_delete).and_wrap_original do |orig, *a, **kw|
+        bulk_delete_calls += 1
+        orig.call(*a, **kw)
+      end
+
+      w.update!(name: "Renamed", price: 999)
+
+      expect(bulk_insert_calls).to eq(1)
+      expect(bulk_delete_calls).to eq(1)
     end
 
     it ":per_call emits substantially more execute calls than :sparql_update for the same save" do
