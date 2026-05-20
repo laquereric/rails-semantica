@@ -241,10 +241,9 @@ When all phases land:
    forced-via-env-var fallbacks.
 3. `bin/check` passes green against engine 0.5.0+.
 4. CHANGELOG `0.3.0` heading drops the `(unreleased)` qualifier.
-5. `lib/semantica/version.rb` bumps to `0.3.0`. (Note: the root
-   `VERSION` file currently reads `0.5.0`, presumably tracking
-   the engine's release rather than the gem's; reconcile during
-   Phase E.)
+5. The root `VERSION` file bumps to `0.3.0`. The version constant
+   is read from there by `lib/semantica/version.rb` (substrate
+   convention; reconciled prior to v0.3.0 work).
 6. CONSUMER_REQUIREMENT_MM.md graduates "arbitrary SPARQL UPDATE"
    from absence into a documented surface.
 

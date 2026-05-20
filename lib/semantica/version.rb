@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 module Semantica
-  # PLAN 0.29.1 Phase A — gem skeleton at v0.1.0. v0.x.x for the
-  # duration of substrate-mutual evolution; v1.0 ships when the
-  # surface stabilises enough to invite outside Rails consumers.
-  VERSION = "0.1.0"
+  # Single source of truth for the gem version is the root VERSION
+  # file, matching the substrate's repo-root convention
+  # (agent-os/rules/ruby.md). The gemspec consumes
+  # Semantica::VERSION; bumps go in the VERSION file, not here.
+  VERSION = File.read(File.expand_path("../../VERSION", __dir__)).strip
 end
