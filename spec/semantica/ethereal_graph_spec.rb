@@ -284,4 +284,189 @@ RSpec.describe Semantica::EtherealGraph do
       expect(host.semantica_graph_blob.download).to eq(original_text)
     end
   end
+
+  # PLAN_0.7.0 Phase C — retract via before_destroy.
+  # Phase D — Semantica::Storable composition.
+  #
+  # These run against an AR-backed model so the destroy / save
+  # callbacks actually fire. The attachment is still stubbed via
+  # FakeBlobAttachment (Recommendation B; Active Storage is the
+  # operator's app responsibility, not the gem spec's).
+  describe "AR-backed lifecycle", :requires_extension do
+    before(:each) do
+      ::ActiveRecord::Base.connection.execute(<<~SQL)
+        CREATE TABLE IF NOT EXISTS ethereal_hosts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT
+        )
+      SQL
+      ::ActiveRecord::Base.connection.execute("DELETE FROM ethereal_hosts")
+      Semantica::Sparql.execute("CLEAR ALL")
+      Semantica::EtherealGraph.reset!
+    end
+
+    describe "Phase C — destroy retracts the graph" do
+      let(:retract_host_class) do
+        Class.new(::ActiveRecord::Base) do
+          self.table_name = "ethereal_hosts"
+          include ::Semantica::EtherealGraph
+
+          ethereal_graph do
+            iri -> { "urn:mm:rhost:#{id}:ctx" }
+          end
+
+          # Stub the attachment so we don't need Active Storage at
+          # spec time. Real-AS integration is the operator's app
+          # responsibility.
+          def semantica_graph_blob
+            @fake_attachment ||= FakeBlobAttachment.new
+          end
+        end
+      end
+
+      it "before_destroy fires retract_ethereal_graph! and clears the named graph" do
+        host = retract_host_class.create!(name: "Doomed")
+        iri = host.ethereal_graph_iri
+
+        Semantica::Sparql.execute(
+          %(INSERT DATA { <urn:item:r1> <schema:name> "InGraph" . }),
+          graph: iri,
+        )
+        before = Semantica::Sparql.ask("ASK { ?s ?p ?o }", graph: iri)
+        expect(before).to eq(ok: true, value: true)
+
+        host.destroy!
+
+        after = Semantica::Sparql.ask("ASK { ?s ?p ?o }", graph: iri)
+        expect(after).to eq(ok: true, value: false)
+        expect(Semantica::EtherealGraph.hydrated?(iri)).to be(false)
+      end
+
+      it "retraction is graph-scoped — sibling graphs and default graph survive" do
+        host = retract_host_class.create!(name: "Scoped")
+        iri = host.ethereal_graph_iri
+
+        # Inject content into this record's graph, a sibling named
+        # graph, and the default graph at the same subject IRI.
+        Semantica::Sparql.execute(
+          %(INSERT DATA { <urn:shared:s> <schema:name> "MyGraph" . }),
+          graph: iri,
+        )
+        Semantica::Sparql.execute(
+          %(INSERT DATA { <urn:shared:s> <schema:name> "SiblingGraph" . }),
+          graph: "urn:mm:graph:sibling",
+        )
+        Semantica::Sparql.execute(
+          %(INSERT DATA { <urn:shared:s> <schema:name> "DefaultGraph" . }),
+        )
+
+        host.destroy!
+
+        own = Semantica::Sparql.ask("ASK { ?s ?p ?o }", graph: iri)
+        sibling = Semantica::Sparql.ask("ASK { ?s ?p ?o }", graph: "urn:mm:graph:sibling")
+        default = Semantica::Sparql.ask("ASK { ?s ?p ?o }")
+
+        expect(own[:value]).to     be(false), "own graph should be empty"
+        expect(sibling[:value]).to be(true),  "sibling named graph must survive"
+        expect(default[:value]).to be(true),  "default graph must survive"
+      end
+    end
+
+    describe "Phase D — Storable + EtherealGraph composition" do
+      let(:composed_class) do
+        Class.new(::ActiveRecord::Base) do
+          self.table_name = "ethereal_hosts"
+          include ::Semantica::Storable
+          include ::Semantica::EtherealGraph
+
+          # Both concerns target the same graph IRI. Storable's
+          # `graph "<iri>"` is a literal-string declaration (one
+          # graph per class); EtherealGraph's `iri ->{...}` can be
+          # dynamic, but we keep them aligned at a single literal
+          # here for parity.
+          #
+          # Declaration order matters: `triples do` must come BEFORE
+          # `ethereal_graph do` so the after_save callbacks register
+          # in (emit, checkpoint) order. Reversed declaration would
+          # make checkpoint fire before emit and capture a stale
+          # blob.
+          triples do
+            graph "urn:mm:composed:ctx"
+            subject -> { "urn:mm:composed:#{id}" }
+            triple "schema:name", -> { name }
+          end
+
+          ethereal_graph do
+            iri           -> { "urn:mm:composed:ctx" }
+            checkpoint_on :save
+          end
+
+          def semantica_graph_blob
+            @fake_attachment ||= FakeBlobAttachment.new
+          end
+        end
+      end
+
+      it "Storable emit fires before EtherealGraph checkpoint (callback order)" do
+        call_log = []
+        composed_class.class_eval do
+          define_method(:semantica_emit_triples!) do
+            call_log << :emit
+            super()
+          end
+          define_method(:checkpoint_ethereal_graph!) do
+            call_log << :checkpoint
+            super()
+          end
+        end
+
+        composed_class.create!(name: "OrderProbe")
+
+        expect(call_log).to eq(%i[emit checkpoint])
+      end
+
+      it "create → checkpoint → evict → hydrate round-trips Storable-emitted state" do
+        host = composed_class.create!(name: "Composed-One")
+        iri = host.ethereal_graph_iri
+
+        # The blob now holds the Storable-emitted triple.
+        expect(host.semantica_graph_blob.attached?).to be(true)
+        expect(host.semantica_graph_blob.byte_size).to be > 0
+
+        # Simulate process restart: wipe the engine + evict cache.
+        Semantica::Sparql.execute("CLEAR ALL")
+        Semantica::EtherealGraph.evict!(iri)
+
+        host.hydrate_ethereal_graph!
+
+        query = Semantica::Sparql.select(
+          %(SELECT ?o WHERE { <urn:mm:composed:#{host.id}> <schema:name> ?o }),
+          graph: iri,
+        )
+        values = query[:results].map { |r| r["o"].delete('"') }
+        expect(values).to contain_exactly("Composed-One")
+      end
+
+      it "update! re-emits and re-checkpoints (blob stays in sync)" do
+        host = composed_class.create!(name: "Composed-Two")
+        first_size = host.semantica_graph_blob.byte_size
+
+        host.update!(name: "Composed-Two-Updated-With-Longer-Name")
+        expect(host.semantica_graph_blob.byte_size).to be > first_size
+
+        # Restart-simulate and confirm the new value is what survives.
+        iri = host.ethereal_graph_iri
+        Semantica::Sparql.execute("CLEAR ALL")
+        Semantica::EtherealGraph.evict!(iri)
+        host.hydrate_ethereal_graph!
+
+        query = Semantica::Sparql.select(
+          %(SELECT ?o WHERE { <urn:mm:composed:#{host.id}> <schema:name> ?o }),
+          graph: iri,
+        )
+        values = query[:results].map { |r| r["o"].delete('"') }
+        expect(values).to contain_exactly("Composed-Two-Updated-With-Longer-Name")
+      end
+    end
+  end
 end
