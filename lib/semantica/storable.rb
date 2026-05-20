@@ -7,6 +7,9 @@ module Semantica
   # PLAN_0.1.0 Phase D — per-model triple-emission DSL.
   # PLAN_0.2.0 Phase A — `on_subject` sub-blocks + literal-string
   # predicate values.
+  # PLAN_0.2.0 Phase B — `each` blocks for collection iteration +
+  # multi-value predicates (one triple per collection element;
+  # multi-value when the predicate IRI is constant across items).
   #
   # ActiveSupport::Concern that takes a `triples do ... end` block
   # declaring a `subject` lambda + an ordered list of
@@ -93,6 +96,9 @@ module Semantica
       decl.on_subject_blocks.each do |block|
         semantica_emit_for_(block.subject_lambda, block.predicates)
       end
+      decl.each_blocks.each do |each_block|
+        semantica_emit_each_block_(decl.subject_lambda, each_block)
+      end
       true
     end
 
@@ -103,6 +109,9 @@ module Semantica
       semantica_retract_for_(decl.subject_lambda, decl.predicates)
       decl.on_subject_blocks.each do |block|
         semantica_retract_for_(block.subject_lambda, block.predicates)
+      end
+      decl.each_blocks.each do |each_block|
+        semantica_retract_each_block_(decl.subject_lambda, each_block)
       end
       true
     end
@@ -131,6 +140,83 @@ module Semantica
       predicates.each do |pred|
         retract_predicate!(subject_term, TermSerializer.predicate(pred.iri))
       end
+    end
+
+    # PLAN_0.2.0 Phase B emission: walk the collection, accumulate
+    # (iri, value) pairs, then for each unique predicate IRI retract
+    # all current values for (subject, predicate) and insert the fresh set.
+    #
+    # Caveats documented in the plan:
+    # - When the collection is empty this save, the predicate set is empty,
+    #   so no retraction fires; stale triples from a prior non-empty save
+    #   persist. v0.2.0 ships this limitation.
+    # - Values returning nil are *skipped* (not emitted as nil-retraction);
+    #   the surrounding read-replace per-predicate already cleared the slot.
+    def semantica_emit_each_block_(subject_lambda, each_block)
+      subject_term = TermSerializer.iri(instance_exec(&subject_lambda))
+      collection = instance_exec(&each_block.collection_lambda)
+      return if collection.nil? || (collection.respond_to?(:empty?) && collection.empty?)
+
+      buffer = collect_each_predicates_(collection, each_block)
+
+      resolved = []
+      buffer.each do |pred|
+        next if pred.if_lambda && !instance_exec(&pred.if_lambda)
+        value = instance_exec(&pred.value_lambda)
+        next if value.nil?
+        resolved << [pred.iri, TermSerializer.object(value)]
+      end
+
+      unique_predicates = resolved.map(&:first).uniq
+      unique_predicates.each do |iri|
+        predicate_term = TermSerializer.predicate(iri)
+        del = ::Semantica::Sparql.execute(
+          "DELETE WHERE { #{subject_term} #{predicate_term} ?o }",
+        )
+        raise_if_strict(del, "DELETE WHERE #{predicate_term}")
+      end
+
+      return if resolved.empty?
+
+      # NT parser requires newline-separated triples; space-separated
+      # bodies only parse the first triple. Confirmed by spec failures
+      # in Phase B's first run.
+      body = resolved.map { |iri, obj|
+        "#{subject_term} #{TermSerializer.predicate(iri)} #{obj} ."
+      }.join("\n")
+      ins = ::Semantica::Sparql.execute("INSERT DATA { #{body} }")
+      raise_if_strict(ins, "INSERT DATA each_block")
+    end
+
+    # Destroy-path counterpart. Walks the collection one last time to
+    # enumerate the predicate set; retracts each via DELETE WHERE.
+    # If the collection is empty at destroy time, no retraction fires —
+    # stale triples from prior saves survive. Same limitation as emit.
+    def semantica_retract_each_block_(subject_lambda, each_block)
+      subject_term = TermSerializer.iri(instance_exec(&subject_lambda))
+      collection = instance_exec(&each_block.collection_lambda)
+      return if collection.nil? || (collection.respond_to?(:empty?) && collection.empty?)
+
+      buffer = collect_each_predicates_(collection, each_block)
+      unique_predicates = buffer.map(&:iri).uniq
+      unique_predicates.each do |iri|
+        predicate_term = TermSerializer.predicate(iri)
+        del = ::Semantica::Sparql.execute(
+          "DELETE WHERE { #{subject_term} #{predicate_term} ?o }",
+        )
+        raise_if_strict(del, "DELETE WHERE #{predicate_term}")
+      end
+    end
+
+    # Run the each block once per collection item, accumulating
+    # Predicate records into a shared buffer.
+    def collect_each_predicates_(collection, each_block)
+      buffer = []
+      collection.each do |item|
+        item_recorder = EachItemRecorder.new(buffer)
+        item_recorder.instance_exec(item, &each_block.block_proc)
+      end
+      buffer
     end
 
     def replace_predicate!(subject_term, predicate_term, new_object_term)
@@ -167,9 +253,9 @@ module Semantica
 
     # ── DSL recorder ────────────────────────────────────────────
 
-    Declaration = Struct.new(:subject_lambda, :predicates, :on_subject_blocks) do
-      def initialize(subject_lambda:, predicates:, on_subject_blocks: [])
-        super(subject_lambda, predicates, on_subject_blocks)
+    Declaration = Struct.new(:subject_lambda, :predicates, :on_subject_blocks, :each_blocks) do
+      def initialize(subject_lambda:, predicates:, on_subject_blocks: [], each_blocks: [])
+        super(subject_lambda, predicates, on_subject_blocks, each_blocks)
       end
     end
 
@@ -182,6 +268,17 @@ module Semantica
     OnSubjectBlock = Struct.new(:subject_lambda, :predicates) do
       def initialize(subject_lambda:, predicates:)
         super(subject_lambda, predicates)
+      end
+    end
+
+    # PLAN_0.2.0 Phase B — per-collection block. block_proc receives
+    # an item as its block param; inside the block, `triple` records
+    # a (per-item interpolated IRI, value lambda closing over item).
+    # The block_proc isn't evaluated at declaration time; emission
+    # re-runs it once per current-collection item.
+    EachBlock = Struct.new(:collection_lambda, :block_proc) do
+      def initialize(collection_lambda:, block_proc:)
+        super(collection_lambda, block_proc)
       end
     end
 
@@ -222,6 +319,18 @@ module Semantica
       end
     end
 
+    # Per-collection-item recorder for `each` blocks. The block_proc
+    # is instance_exec'd against an EachItemRecorder with the item
+    # passed as the block param; inside the block, `triple` pushes
+    # into a buffer shared across all items in the iteration.
+    class EachItemRecorder
+      include TripleRecording
+
+      def initialize(buffer)
+        @predicates = buffer
+      end
+    end
+
     class Recorder
       include TripleRecording
 
@@ -229,6 +338,7 @@ module Semantica
         @subject_lambda = nil
         @predicates = []
         @on_subject_blocks = []
+        @each_blocks = []
       end
 
       # subject -> { "urn:mm:product:#{sku}" }
@@ -253,12 +363,29 @@ module Semantica
         )
       end
 
+      # each -> { product_specs } do |spec|
+      #   triple "mm:#{spec.name.camelize(:lower)}", -> { spec.value }
+      # end
+      #
+      # The block_proc is stored as-is; emission re-evaluates the
+      # collection_lambda each save + runs the block once per item.
+      def each(collection_callable, &predicates_block)
+        raise ArgumentError, "each requires a predicates block" unless predicates_block
+        raise ArgumentError, "each requires a collection lambda" unless collection_callable
+
+        @each_blocks << EachBlock.new(
+          collection_lambda: collection_callable,
+          block_proc: predicates_block,
+        )
+      end
+
       def finalize!
         raise ArgumentError, "triples block requires `subject`" unless @subject_lambda
         Declaration.new(
           subject_lambda: @subject_lambda,
           predicates: @predicates.freeze,
           on_subject_blocks: @on_subject_blocks.freeze,
+          each_blocks: @each_blocks.freeze,
         ).freeze
       end
     end

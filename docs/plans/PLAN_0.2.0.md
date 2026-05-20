@@ -18,17 +18,18 @@
 
 ## Current state
 
-**Phase A landed** (multi-subject emission): `Recorder` records
-`on_subject` blocks alongside primary subject + predicates;
-`Declaration#on_subject_blocks` field added (default `[]`); lifecycle
-hooks iterate primary then each block with the same read-replace
-idempotency. Literal-string predicate values (`triple "rdf:type",
-"<urn:mm:CategoryFolder>"`) supported via TripleRecording's
-`as_callable` wrap. 7 new specs land; 50 total green via `bin/check`.
+**Phase A landed** (multi-subject emission): `on_subject` blocks
+alongside primary subject + predicates; literal-string predicate
+values via TripleRecording's `as_callable`. 7 specs.
 
-Phases B (collection iteration + multi-value), C (JSON literals), F
-(specs), G (docs) still open. D + E are pointers to PLAN_0.5.0 +
-PLAN_0.4.0 respectively.
+**Phase B landed** (collection iteration + multi-value): `each`
+blocks; per-item-interpolated predicates; read-replace per emitted
+predicate; `Sparql.execute("DELETE WHERE { <s> <p> ?o }")` public
+surface; INSERT DATA body uses `\n`-separated triples. 8 specs. 58
+total green via `bin/check`.
+
+Phases C (JSON literals), F (specs), G (docs) still open. D + E are
+pointers to PLAN_0.5.0 + PLAN_0.4.0 respectively.
 
 Shipped at v0.1.0:
 

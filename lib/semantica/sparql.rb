@@ -125,12 +125,45 @@ module Semantica
         when /\ADELETE\s+DATA\s*\{(.+)\}\s*\z/im
           body = Regexp.last_match(1).strip
           delete_each_triple(connection, body)
+        when %r{\ADELETE\s+WHERE\s*\{\s*<([^>]+)>\s+<([^>]+)>\s+\?\w+\s*\.?\s*\}\s*\z}im
+          # PLAN_0.2.0 Phase B — DELETE WHERE { <s> <p> ?o }: retract every triple
+          # with the given subject + predicate regardless of object. Internal
+          # translation: SELECT ?o WHERE { ... } then rdf_delete per result.
+          subject_iri   = Regexp.last_match(1)
+          predicate_iri = Regexp.last_match(2)
+          delete_where_subject_predicate(connection, subject_iri, predicate_iri)
         when /\ACLEAR\s+(ALL|DEFAULT)\s*\z/im
           connection.select_value("SELECT rdf_clear()")
           0
         else
-          raise ::ActiveRecord::StatementInvalid, "unsupported SPARQL UPDATE form (v0.1.0 supports INSERT DATA / DELETE DATA / CLEAR ALL): #{stripped[0, 80]}"
+          raise ::ActiveRecord::StatementInvalid, "unsupported SPARQL UPDATE form (v0.2.0 supports INSERT DATA / DELETE DATA / DELETE WHERE { <s> <p> ?o } / CLEAR ALL): #{stripped[0, 80]}"
         end
+      end
+
+      # Retract every triple matching (subject_iri, predicate_iri) regardless
+      # of object. Internal translation since v0.2.0 — until sparql_update
+      # routes arbitrary UPDATE forms through the engine (PLAN_0.3.0).
+      def delete_where_subject_predicate(connection, subject_iri, predicate_iri)
+        inner = "SELECT ?o WHERE { <#{subject_iri}> <#{predicate_iri}> ?o }"
+        results_json = connection.select_value(
+          "SELECT sparql_query(#{connection.quote(inner)})",
+        )
+        return 0 if results_json.nil? || results_json.empty?
+        rows = ::JSON.parse(results_json)
+        count = 0
+        rows.each do |row|
+          old_o = row["o"]
+          next if old_o.nil? || old_o.empty?
+          o = old_o.start_with?("<") ? unwrap_iri(old_o) : old_o
+          connection.select_value(
+            "SELECT rdf_delete(" \
+              "#{connection.quote(subject_iri)}," \
+              "#{connection.quote(predicate_iri)}," \
+              "#{connection.quote(o)})",
+          )
+          count += 1
+        end
+        count
       end
 
       # Parse a N-Triples body and issue one rdf_delete per triple.

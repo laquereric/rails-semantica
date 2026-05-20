@@ -2,6 +2,40 @@
 
 ## 0.2.0 — (unreleased)
 
+PLAN_0.2.0 Phase B — `each` blocks (collection iteration + multi-value predicates).
+
+- `Recorder#each(collection_lambda, &predicates_block)` declares a
+  per-collection-item emission. The block_proc is **not** evaluated
+  at declaration time; emission re-runs it once per current-collection
+  item via an `EachItemRecorder` that pushes (per-item-interpolated
+  IRI, value lambda closing over item) into a shared buffer.
+- Multi-value predicates fall out naturally: a constant predicate
+  IRI emitted N times across N items produces N triples (e.g.
+  `mm:hasFeature` for N flags).
+- Read-replace adjustment: before any emission for an each block,
+  retract all triples matching (subject, predicate) for every
+  unique predicate IRI the block emits this save. v0.2.0 ships the
+  documented limitation: empty collection this save → no retraction
+  → stale triples from prior non-empty save persist. Operators
+  needing strict cleanup pair with explicit `Sparql.execute("DELETE
+  WHERE …")`.
+- nil-valued lambdas inside each blocks are **skipped** (not emitted
+  as nil-retraction); the surrounding read-replace already cleared
+  the predicate slot.
+- `Sparql.execute` dispatcher grows a new branch:
+  `DELETE WHERE { <s> <p> ?o }` → SELECT current values + rdf_delete
+  each. Lifted onto the public `execute` surface so the envelope
+  discipline holds. Returns `{ ok: true, count: <integer> }`.
+- `Declaration` gains `each_blocks: Array<EachBlock>` (default `[]`).
+- INSERT DATA body construction uses `\n`-separated triples (NT
+  parser requires this; space-separated bodies only persisted the
+  first triple in the engine round-trip).
+- 8 new specs (58 total, up from 50): 3 pure-Ruby recorder cases
+  (each capture, ArgumentError on missing block / missing
+  collection) + 5 live-engine lifecycle cases (per-item-interpolated
+  predicates; multi-value; update replaces predicate set; destroy
+  retracts; public `DELETE WHERE` round-trip).
+
 PLAN_0.2.0 Phase A — `on_subject` sub-blocks + literal-string predicate values.
 
 - `Recorder#on_subject(subject_callable, &predicates_block)` declares

@@ -136,6 +136,35 @@ RSpec.describe Semantica::Storable do
           .to raise_error(ArgumentError, /subject lambda/)
       end
     end
+
+    describe "PLAN_0.2.0 Phase B — `each` blocks (collection iteration + multi-value predicates)" do
+      it "captures each blocks as (collection_lambda, block_proc) pairs" do
+        recorder = described_class.new
+        recorder.instance_eval do
+          subject -> { "urn:s" }
+          each -> { [:a, :b] } do |item|
+            triple "mm:item", -> { item }
+          end
+        end
+        decl = recorder.finalize!
+
+        expect(decl.each_blocks.length).to eq(1)
+        expect(decl.each_blocks.first.collection_lambda.call).to eq([:a, :b])
+        expect(decl.each_blocks.first.block_proc).to be_a(Proc)
+      end
+
+      it "raises ArgumentError if each is called without a block" do
+        recorder = described_class.new
+        expect { recorder.each(-> { [] }) }
+          .to raise_error(ArgumentError, /predicates block/)
+      end
+
+      it "raises ArgumentError if each is called without a collection lambda" do
+        recorder = described_class.new
+        expect { recorder.each(nil) { triple "mm:x", -> { 1 } } }
+          .to raise_error(ArgumentError, /collection lambda/)
+      end
+    end
   end
 
   describe "lifecycle integration", :requires_extension do
@@ -308,6 +337,156 @@ RSpec.describe Semantica::Storable do
       SPARQL
       expect(result[:ok]).to be(true)
       expect(result[:results].map { |r| r["s"] }.join).to include("camera")
+    end
+  end
+
+  describe "PLAN_0.2.0 Phase B — each blocks lifecycle integration", :requires_extension do
+    # A model whose triple emissions come from a per-row collection
+    # plus a multi-value feature flag predicate.
+    before(:each) do
+      ::ActiveRecord::Base.connection.execute(<<~SQL)
+        CREATE TABLE IF NOT EXISTS thingies (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          sku TEXT NOT NULL,
+          specs TEXT,
+          flags TEXT
+        )
+      SQL
+      ::ActiveRecord::Base.connection.execute("DELETE FROM thingies")
+
+      unless Object.const_defined?(:Thingy)
+        thingy_class = Class.new(::ActiveRecord::Base) do
+          self.table_name = "thingies"
+          include ::Semantica::Storable
+
+          # `specs` is a JSON-encoded array of {"name":..., "value":...}.
+          # `flags` is a JSON-encoded array of strings (feature codes).
+          def specs_array
+            return [] if specs.nil? || specs.empty?
+            require "json"
+            ::JSON.parse(specs).map { |h| OpenStruct.new(name: h["name"], value: h["value"]) }
+          end
+
+          def flags_array
+            return [] if flags.nil? || flags.empty?
+            require "json"
+            ::JSON.parse(flags)
+          end
+
+          triples do
+            subject -> { "urn:mm:thingy:#{sku}" }
+
+            each -> { specs_array } do |spec|
+              triple "mm:#{spec.name}", -> { spec.value }
+            end
+
+            each -> { flags_array } do |flag|
+              triple "mm:hasFeature", -> { flag }
+            end
+          end
+        end
+        Object.const_set(:Thingy, thingy_class)
+        require "ostruct"
+      end
+    end
+
+    it "emits one triple per collection item with per-item-interpolated predicates" do
+      Thingy.create!(
+        sku: "T1",
+        specs: '[{"name":"weight","value":"500g"},{"name":"color","value":"red"}]',
+      )
+
+      weight = Semantica::Sparql.select(
+        "SELECT ?o WHERE { <urn:mm:thingy:T1> <mm:weight> ?o }",
+      )
+      color = Semantica::Sparql.select(
+        "SELECT ?o WHERE { <urn:mm:thingy:T1> <mm:color> ?o }",
+      )
+
+      expect(weight[:ok]).to be(true)
+      expect(weight[:results].first["o"]).to include("500g")
+      expect(color[:ok]).to be(true)
+      expect(color[:results].first["o"]).to include("red")
+    end
+
+    it "emits multi-value via repeated each (one triple per flag)" do
+      Thingy.create!(
+        sku: "T2",
+        flags: '["bluetooth","wifi","usb-c"]',
+      )
+
+      result = Semantica::Sparql.select(
+        "SELECT ?o WHERE { <urn:mm:thingy:T2> <mm:hasFeature> ?o }",
+      )
+      expect(result[:ok]).to be(true)
+      expect(result[:results].length).to eq(3)
+      values = result[:results].map { |r| r["o"] }.join
+      expect(values).to include("bluetooth").and include("wifi").and include("usb-c")
+    end
+
+    it "replaces the each-block predicate set on update (no stale triples)" do
+      t = Thingy.create!(
+        sku: "T3",
+        flags: '["bluetooth","wifi"]',
+      )
+
+      before = Semantica::Sparql.select(
+        "SELECT ?o WHERE { <urn:mm:thingy:T3> <mm:hasFeature> ?o }",
+      )
+      expect(before[:results].length).to eq(2)
+
+      t.update!(flags: '["usb-c"]')
+
+      after = Semantica::Sparql.select(
+        "SELECT ?o WHERE { <urn:mm:thingy:T3> <mm:hasFeature> ?o }",
+      )
+      expect(after[:results].length).to eq(1)
+      expect(after[:results].first["o"]).to include("usb-c")
+    end
+
+    it "retracts each-block triples on destroy" do
+      t = Thingy.create!(
+        sku: "T4",
+        specs: '[{"name":"weight","value":"100g"}]',
+        flags: '["a","b"]',
+      )
+
+      before = Semantica::Sparql.ask(
+        "ASK { <urn:mm:thingy:T4> <mm:hasFeature> ?o }",
+      )
+      expect(before).to eq(ok: true, value: true)
+
+      t.destroy!
+
+      after = Semantica::Sparql.ask(
+        "ASK { <urn:mm:thingy:T4> ?p ?o }",
+      )
+      expect(after).to eq(ok: true, value: false)
+    end
+
+    it "Sparql.execute('DELETE WHERE { <s> <p> ?o }') retracts all matching triples" do
+      Semantica::Sparql.execute(<<~SPARQL)
+        INSERT DATA {
+          <urn:mm:thingy:T5> <mm:x> "a" .
+          <urn:mm:thingy:T5> <mm:x> "b" .
+          <urn:mm:thingy:T5> <mm:x> "c" .
+        }
+      SPARQL
+      before = Semantica::Sparql.select(
+        "SELECT ?o WHERE { <urn:mm:thingy:T5> <mm:x> ?o }",
+      )
+      expect(before[:results].length).to eq(3)
+
+      result = Semantica::Sparql.execute(
+        "DELETE WHERE { <urn:mm:thingy:T5> <mm:x> ?o }",
+      )
+      expect(result[:ok]).to be(true)
+      expect(result[:count]).to eq(3)
+
+      after = Semantica::Sparql.select(
+        "SELECT ?o WHERE { <urn:mm:thingy:T5> <mm:x> ?o }",
+      )
+      expect(after[:results]).to be_empty
     end
   end
 end
