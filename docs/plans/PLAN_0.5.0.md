@@ -20,6 +20,29 @@
 | `PLAN_0.4.0.md` Phase A | this dir | `bulk_insert` / `bulk_delete` already accept a 4-tuple row shape with `graph` per row. v0.5.0 connects `Storable`'s graph declaration to that path. |
 | `CONSUMER_REQUIREMENT_MM.md` §5 | this dir | MM's named-graph ask; `Sparql.{select,ask,construct,execute}` `graph:` kwarg + `triples do; graph "..."; end` are the surfaces MM consumes. |
 
+## Current state
+
+**Released as v0.5.0 (2026-05-20).** All phases landed:
+
+- Phase A — `Sparql.{select,ask,construct,execute}` `graph:` kwarg;
+  `GraphScoping.scope_read` for FROM-clause injection; `:invalid_graph`
+  + `:invalid_dsl` reason symbols. (Initial commit `03f8915`.)
+- Phase B — `Storable.triples do; graph "…"; end` DSL; lifecycle
+  hooks thread graph through all three dispatch modes. `:per_call`
+  shipped in `03f8915`; `:sparql_update` and `:bulk` dispatch modes
+  composed for free once PLAN_0.3.0 / PLAN_0.4.0 landed (each
+  ladder rung calls `Sparql.execute` / `bulk_*` with `graph:` set,
+  which already routes through the graph-aware paths). Equivalence
+  pinned by the dispatch-mode-vs-graph parity spec (3 new cases).
+- Phase C — multi-graph queries pinned as out-of-scope; operators
+  hand-author `FROM NAMED <g1> FROM NAMED <g2> ... GRAPH ?g { ... }`
+  patterns.
+- Phase D — specs landed alongside Phases A + B; the dispatch-mode
+  equivalence spec is the last gate.
+- Phase E — VERSION → 0.5.0; CHANGELOG `0.5.0` heading dated;
+  README + CONSUMER_REQUIREMENT_MM.md updated. PLAN_0.2.0 Phase D
+  was already a one-line pointer to this plan.
+
 ## Engine surface (already landed, sqlite-sparql 0.3.0; refined further in 0.4.0 + 0.5.0)
 
 Pinned by the engine since 0.3.0:

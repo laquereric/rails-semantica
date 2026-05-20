@@ -277,7 +277,7 @@ Semantics:
 - `execute("INSERT DATA { ... }", graph: ...)` routes through the engine's 4-arg `rdf_insert(s,p,o,graph)` (sqlite-sparql 0.3.0). `execute("DELETE DATA { ... }", graph: ...)` and `execute("DELETE WHERE { <s> <p> ?o }", graph: ...)` route through 4-arg `rdf_delete`.
 - Blank-node graph IRIs (`_:foo`) refuse with `:invalid_graph` at the gem boundary.
 - `execute("CLEAR ALL", graph: ...)` and `execute("CLEAR DEFAULT", graph: ...)` refuse with `:invalid_dsl` (ambiguous scoping); operators use `execute("CLEAR GRAPH <urn:...>")` for named-graph clear.
-- `Storable` lifecycle hooks (`after_save` / `after_destroy`) thread the declared graph through the per-call dispatch path (`:bulk` and `:sparql_update` dispatch modes are post-PLAN_0.5.0; not yet shipped).
+- `Storable` lifecycle hooks (`after_save` / `after_destroy`) thread the declared graph through all three dispatch modes (`:sparql_update` / `:bulk` / `:per_call`); all produce equivalent end states for a graph-scoped model. Pinned by `spec/semantica/storable_spec.rb`'s dispatch-mode-vs-graph parity loop.
 - Cross-graph isolation: ops on a graph leave triples for the same subject in other graphs untouched.
 
 New pinned reason symbols (additive on top of v0.1.0): `:invalid_graph`, `:invalid_dsl`.

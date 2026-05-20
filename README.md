@@ -129,6 +129,33 @@ end
 as typed literals with `xsd:string` datatype. Read back via
 `Sparql.select` + `JSON.parse` on the literal value.
 
+### Named graphs — `graph "…"` DSL + `graph:` kwarg (v0.5.0)
+
+```ruby
+class Product < ApplicationRecord
+  include Semantica::Storable
+
+  triples do
+    graph "urn:mm:graph:bhphoto"
+    subject -> { "urn:mm:product:#{sku}" }
+    triple "schema:name", -> { name }
+    # on_subject + each blocks inherit the outer graph
+  end
+end
+
+Semantica::Sparql.select("SELECT ?s WHERE { ?s ?p ?o }", graph: "urn:mm:graph:bhphoto")
+Semantica::Sparql.execute("INSERT DATA { … }",            graph: "urn:mm:graph:bhphoto")
+```
+
+All three dispatch modes (`:sparql_update` / `:bulk` / `:per_call`)
+produce equivalent end states for a graph-scoped model. Cross-graph
+isolation: operations on `urn:mm:graph:bhphoto` leave triples for
+the same subject in other graphs (including the default graph)
+untouched. Blank-node graph IRIs refuse at the gem boundary with
+`:invalid_graph`. `execute("CLEAR ALL"/"CLEAR DEFAULT", graph: …)`
+refuses with `:invalid_dsl` (ambiguous scoping; use
+`execute("CLEAR GRAPH <urn:…>")`).
+
 ```ruby
 # SPARQL queries (structured envelopes; never raise):
 Semantica::Sparql.select(<<~SPARQL)
@@ -190,7 +217,9 @@ Semantica::Sparql.select("SELEC bogus") # malformed
 Pinned `:reason` symbols (v0.1.0): `:sparql_parse_error`,
 `:extension_not_loaded`, `:ar_connection_error`, `:unexpected_error`.
 v0.3.0 adds `:sparql_eval_error` (semantically-invalid UPDATE — the
-engine surfaces `"SPARQL evaluation error:"`).
+engine surfaces `"SPARQL evaluation error:"`). v0.5.0 adds
+`:invalid_graph` (blank-node graph IRIs) and `:invalid_dsl`
+(ambiguous DSL — e.g. `execute("CLEAR ALL", graph: …)`).
 
 ## Why opt-in?
 
@@ -237,6 +266,13 @@ heading + a coordinated substrate bump):
 - Abort-batch-on-error semantics: any malformed row refuses the whole batch; `:because:` carries `"row <N>: …"`.
 - `Storable.dispatch_mode == :bulk` lights up: 1 `bulk_delete` + 1 `bulk_insert` per save regardless of declared-predicate count.
 
+**Pinned at v0.5.0** (additive on top of v0.4.0):
+
+- `Semantica::Sparql.{select,ask,construct,execute}(query, graph: nil_or_iri_string)` optional kwarg. `nil` (or omitted) = default graph; String = named graph.
+- `triples do; graph "<iri>"; … end` DSL declaration. One graph per declaration; `on_subject` + `each` blocks inherit. Captured at recording time.
+- `Storable.dispatch_mode` graph-equivalence: all three modes produce identical end states for a graph-scoped model.
+- `Semantica::Sparql` `:reason` symbols `:invalid_graph` (blank-node graph IRIs) + `:invalid_dsl` (ambiguous `CLEAR` + `graph:`).
+
 **Still operator-fluid** (may change without deprecation cycle
 during v0.x.x):
 
@@ -276,6 +312,8 @@ isn't on disk.
   arbitrary-UPDATE pass-through + dispatch-mode ladder.
 - [`docs/plans/PLAN_0.4.0.md`](docs/plans/PLAN_0.4.0.md) — the v0.4.0
   bulk-write surface + `:bulk` dispatch implementation.
+- [`docs/plans/PLAN_0.5.0.md`](docs/plans/PLAN_0.5.0.md) — the v0.5.0
+  named-graph support (`graph:` kwarg + `graph "…"` DSL).
 - [`vendor/sqlite-sparql/README.md`](../sqlite-sparql/README.md) — the
   Rust SQLite extension this gem wraps.
 - [`docs/research/Semantica.md`](../../docs/research/Semantica.md) — the

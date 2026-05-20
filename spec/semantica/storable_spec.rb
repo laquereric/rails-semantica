@@ -607,5 +607,60 @@ RSpec.describe Semantica::Storable do
       expect(survivor[:value]).to be(true),
         "default-graph triple at the same subject must survive named-graph destroy"
     end
+
+    # PLAN_0.5.0 Phase B exit criterion — graph-scoped models
+    # produce equivalent end states under all three dispatch modes.
+    describe "dispatch-mode equivalence" do
+      around do |ex|
+        original = ENV[Semantica::Storable::ENV_DISPATCH_MODE]
+        ex.run
+      ensure
+        ENV[Semantica::Storable::ENV_DISPATCH_MODE] = original
+        Semantica::Storable.dispatch_mode_reset!
+      end
+
+      %w[sparql_update bulk per_call].each do |mode|
+        context "in :#{mode} mode" do
+          before do
+            ENV[Semantica::Storable::ENV_DISPATCH_MODE] = mode
+            Semantica::Storable.dispatch_mode_reset!
+            expect(Semantica::Storable.dispatch_mode).to eq(mode.to_sym)
+          end
+
+          it "create + update + destroy all confine to the declared graph" do
+            gw = GraphWidget.create!(sku: "GE-#{mode}", name: "First")
+
+            in_graph_a = Semantica::Sparql.ask(
+              %(ASK { <urn:mm:gw:GE-#{mode}> <schema:name> "First" }),
+              graph: "urn:mm:graph:bhphoto",
+            )
+            in_default_a = Semantica::Sparql.ask(
+              %(ASK { <urn:mm:gw:GE-#{mode}> <schema:name> "First" }),
+            )
+            expect(in_graph_a).to   eq(ok: true, value: true)
+            expect(in_default_a).to eq(ok: true, value: false)
+
+            gw.update!(name: "Second")
+            in_graph_b = Semantica::Sparql.ask(
+              %(ASK { <urn:mm:gw:GE-#{mode}> <schema:name> "Second" }),
+              graph: "urn:mm:graph:bhphoto",
+            )
+            stale_b = Semantica::Sparql.ask(
+              %(ASK { <urn:mm:gw:GE-#{mode}> <schema:name> "First" }),
+              graph: "urn:mm:graph:bhphoto",
+            )
+            expect(in_graph_b[:value]).to be(true)
+            expect(stale_b[:value]).to be(false), "old value retracted in :#{mode}"
+
+            gw.destroy!
+            after = Semantica::Sparql.ask(
+              "ASK { <urn:mm:gw:GE-#{mode}> <schema:name> ?o }",
+              graph: "urn:mm:graph:bhphoto",
+            )
+            expect(after).to eq(ok: true, value: false)
+          end
+        end
+      end
+    end
   end
 end

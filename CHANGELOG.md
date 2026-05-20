@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.0 — 2026-05-20
+
+Closes PLAN_0.5.0 against engine ≥ 0.3.0 (current pin 0.5.0
+satisfies). Named-graph support:
+
+- `Semantica::Sparql.{select,ask,construct,execute}` accept an
+  optional `graph:` kwarg. Read paths textually insert `FROM <graph>`
+  between projection and WHERE body (PREFIX preamble preserved;
+  WHERE-less syntactic sugar handled). Writes route through the
+  engine's 4-arg `rdf_insert(s,p,o,graph)` / `rdf_delete(s,p,o,graph)`
+  (sqlite-sparql 0.3.0); arbitrary UPDATE paths prepend `WITH <graph>`.
+- `Storable` `triples do; graph "<iri>"; … end` DSL declares the
+  named graph every triple in the block emits to. `on_subject` and
+  `each` blocks inherit the outer graph.
+- All three dispatch modes (`:sparql_update` / `:bulk` /
+  `:per_call`) produce equivalent end states for a graph-scoped
+  model. The `:bulk` rung threads the graph through the 4-tuple
+  row shape; the `:sparql_update` rung prepends `WITH <graph>`;
+  the `:per_call` rung routes through the engine's 4-arg `rdf_*`
+  scalars.
+- Blank-node graph IRIs refuse at the gem boundary with the new
+  `:invalid_graph` reason symbol. `execute("CLEAR ALL"/"CLEAR
+  DEFAULT", graph: …)` refuses with the new `:invalid_dsl` reason
+  (ambiguous scoping — use `execute("CLEAR GRAPH <urn:…>")`).
+- 3 new specs (126 total): dispatch-mode-vs-graph equivalence
+  parity loop across `:sparql_update` / `:bulk` / `:per_call`.
+
+(Phase A and Phase B `:per_call` mode shipped earlier in commit
+`03f8915`; this commit closes the dispatch-mode equivalence
+contract once `:sparql_update` and `:bulk` paths landed via
+PLAN_0.3.0 + PLAN_0.4.0.)
+
 ## 0.4.0 — 2026-05-20
 
 Closes PLAN_0.4.0 against engine ≥ 0.4.0 (current pin 0.5.0
