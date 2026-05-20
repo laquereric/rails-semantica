@@ -10,6 +10,7 @@ require_relative "semantica/version"
 require_relative "semantica/loader"
 require_relative "semantica/sparql"
 require_relative "semantica/storable"
+require_relative "semantica/ethereal_graph"
 require_relative "semantica/railtie" if defined?(::Rails::Railtie)
 
 module Semantica

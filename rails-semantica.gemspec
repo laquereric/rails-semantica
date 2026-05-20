@@ -47,6 +47,13 @@ Gem::Specification.new do |spec|
   spec.add_dependency "activerecord",  "~> 8.0"
   spec.add_dependency "sqlite3",       "~> 2.4"
 
-  spec.add_development_dependency "rspec",  "~> 3.13"
-  spec.add_development_dependency "rake",   "~> 13.0"
+  # activestorage is optional — only required for the
+  # Semantica::EtherealGraph concern (PLAN_0.7.0). Operators who
+  # don't include that concern can omit it from their Gemfile.
+  # The concern detects whether `has_one_attached` is available
+  # and falls back to leaving attachment registration to the
+  # operator if AS isn't loaded.
+
+  spec.add_development_dependency "rspec", "~> 3.13"
+  spec.add_development_dependency "rake",  "~> 13.0"
 end
