@@ -282,15 +282,17 @@ Semantics:
 
 New pinned reason symbols (additive on top of v0.1.0): `:invalid_graph`, `:invalid_dsl`.
 
-### 6. Batched-write convenience (`Sparql.bulk_insert`)
+### 6. Batched-write convenience (`Sparql.bulk_insert`) — **SHIPPED (PLAN_0.4.0, v0.4.0)**
 
-Current write surfaces are all per-call: `Sparql.execute("INSERT DATA
-{ <s> <p> <o> . }")` for ad-hoc emission; `Storable`'s `after_save`
-emits one `SELECT + DELETE + INSERT DATA` round-trip per declared
-predicate. For PLAN_0_29_1 Phase B.1's copy migration (one-shot,
-thousands of triples) and for `Storable`'s per-save lifecycle hooks
-(every Product save re-emits multiple predicates), Rust-side batching
-beats per-call work. The substrate would consume:
+Shipped surfaces: `Semantica::Sparql.bulk_insert(rows)` /
+`bulk_delete(rows)` accept both Hash and Array row forms; single
+FFI crossing per batch via the engine's `rdf_insert_many` /
+`rdf_delete_many` scalars. Abort-batch-on-error: any malformed row
+refuses the whole batch (`:because:` carries the row index);
+`Storable.dispatch_mode == :bulk` lights up — lifecycle hooks
+collapse to one combined `bulk_delete` + one combined `bulk_insert`
+per save regardless of declared-predicate count. The substrate
+consumes:
 
 ```ruby
 Semantica::Sparql.bulk_insert([

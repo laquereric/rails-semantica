@@ -165,6 +165,19 @@ Semantica::Sparql.execute(<<~SPARQL)
   WHERE  { ?s <schema:tag> "stale" }
 SPARQL
 # => { ok: true, count: 0 }  (signed net delta: -N delete + N insert)
+
+# Bulk write — single FFI crossing per batch (v0.4.0).
+Semantica::Sparql.bulk_insert([
+  { s: "urn:mm:product:EPET2850", p: "schema:name",     o: "Epson EcoTank" },
+  { s: "urn:mm:product:EPET2850", p: "schema:category", o: "printer" },
+  ["urn:mm:product:EPET2851", "schema:name", "HP DeskJet", "urn:mm:graph:bhphoto"],
+])
+# => { ok: true, inserted: 3 }
+# Abort-batch-on-error: any malformed row refuses the whole batch
+# (store unchanged); refusal envelope's :because: carries `row <N>:`.
+
+Semantica::Sparql.bulk_delete(rows)
+# => { ok: true, deleted: <integer> }
 ```
 
 Failure envelopes carry a verbatim because-clause:
@@ -216,6 +229,14 @@ heading + a coordinated substrate bump):
 - `Semantica::Storable.dispatch_mode` reader → `:sparql_update | :bulk | :per_call`. One-shot probe; cached process-wide; reset via `dispatch_mode_reset!`.
 - `MM_SEMANTICA_DISPATCH_MODE` env var forces a mode for predictable behaviour across upgrades (lifetime ≥ v1.0).
 
+**Pinned at v0.4.0** (additive on top of v0.3.0):
+
+- `Semantica::Sparql.bulk_insert(rows)` → `{ ok:, inserted: <integer> }`. `:inserted:` reflects engine set semantics (dedup-aware).
+- `Semantica::Sparql.bulk_delete(rows)` → `{ ok:, deleted: <integer> }`.
+- Row shapes: `Array<Hash{s:, p:, o:, graph:?}>` and `Array<Array>` 3/4-tuple — equivalent.
+- Abort-batch-on-error semantics: any malformed row refuses the whole batch; `:because:` carries `"row <N>: …"`.
+- `Storable.dispatch_mode == :bulk` lights up: 1 `bulk_delete` + 1 `bulk_insert` per save regardless of declared-predicate count.
+
 **Still operator-fluid** (may change without deprecation cycle
 during v0.x.x):
 
@@ -253,6 +274,8 @@ isn't on disk.
   DSL extensions (multi-subject, each blocks, JSON literals).
 - [`docs/plans/PLAN_0.3.0.md`](docs/plans/PLAN_0.3.0.md) — the v0.3.0
   arbitrary-UPDATE pass-through + dispatch-mode ladder.
+- [`docs/plans/PLAN_0.4.0.md`](docs/plans/PLAN_0.4.0.md) — the v0.4.0
+  bulk-write surface + `:bulk` dispatch implementation.
 - [`vendor/sqlite-sparql/README.md`](../sqlite-sparql/README.md) — the
   Rust SQLite extension this gem wraps.
 - [`docs/research/Semantica.md`](../../docs/research/Semantica.md) — the

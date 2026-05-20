@@ -19,6 +19,23 @@
 | `CONSUMER_REQUIREMENT_MM.md` §6 | this dir | MM's batched-write convenience ask; `Sparql.bulk_insert` is the public-facing surface MM consumes. |
 | `sqlite-sparql/CONSUMER_REQUIREMENT_RS.md` §"Batched insert" | engine repo | RS's expectations doc for the engine. v0.4.0 lands the gem-side half of that contract. |
 
+## Current state
+
+**Released as v0.4.0 (2026-05-20).** All four phases landed:
+
+- Phase A — `Sparql.bulk_insert` / `Sparql.bulk_delete` facade
+  (Hash + Array row forms; abort-batch-on-error; row-indexed
+  refusal envelope).
+- Phase B — `Storable.dispatch_mode == :bulk` lifecycle path:
+  `BulkEmitBuffer` captures replace/retract intents across one
+  save, flushes via one `bulk_delete` + one `bulk_insert`.
+  `Sparql.bulk_*` grew a `raw:` kwarg for engine-form rows.
+- Phase C — parity/set-semantics/malformed-batch specs landed
+  alongside Phase A; perf-smoke benchmark deferred (release-mode-only,
+  not a release gate).
+- Phase D — VERSION → 0.4.0; CHANGELOG `0.4.0` heading dated;
+  README + CONSUMER_REQUIREMENT_MM.md updated.
+
 ## Engine surface (already landed, sqlite-sparql 0.4.0)
 
 ```sql

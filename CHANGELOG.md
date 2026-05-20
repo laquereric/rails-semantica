@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.4.0 — (unreleased)
+## 0.4.0 — 2026-05-20
+
+Closes PLAN_0.4.0 against engine ≥ 0.4.0 (current pin 0.5.0
+satisfies). Bulk-write facade exposes `Sparql.bulk_insert` /
+`Sparql.bulk_delete`; `Storable`'s `:bulk` dispatch lights up,
+giving the dispatch ladder its full three-rung surface.
+
 
 PLAN_0.4.0 Phase B — `Storable.dispatch_mode == :bulk` implementation.
 
