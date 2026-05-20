@@ -67,13 +67,16 @@ Semantica::Sparql.execute(update_query_string)
 # => { ok: false, reason: <symbol>, because: <string> }
 # v0.1.0 supports INSERT DATA / DELETE DATA / CLEAR ALL forms.
 # v0.2.0 adds DELETE WHERE { <s> <p> ?o } (read-replace by predicate).
-# Arbitrary SPARQL UPDATE is post-v0.2.0 (ships as PLAN_0.3.0 against
-# engine sparql_update — see rails-semantica/docs/plans/PLAN_0.3.0.md
-# and the engine's CONSUMER_REQUIREMENT_RS.md).
+# v0.3.0 routes any other UPDATE form through the engine's
+# sparql_update scalar; `:count:` is the engine's signed net delta
+# (inserts − deletes) for that path. The four fast paths still
+# return positive counts.
 ```
 
 Pinned `:reason` symbols (v0.1.0): `:sparql_parse_error`,
 `:extension_not_loaded`, `:ar_connection_error`, `:unexpected_error`.
+v0.3.0 adds `:sparql_eval_error` (semantically-invalid UPDATE; engine
+prefix `"SPARQL evaluation error:"`).
 v0.5.0 (named-graph) adds `:invalid_graph` and `:invalid_dsl`; see §5.
 
 Envelope-shape stability MM depends on:
@@ -127,7 +130,11 @@ to RubyGems consumption at v1.0.
 So upstream is free to change these without notifying MM:
 
 - The exact internal SQL emitted by `Storable` lifecycle hooks (MM observes
-  the SPARQL-visible outcome, not the SQL).
+  the SPARQL-visible outcome, not the SQL). v0.3.0's `dispatch_mode`
+  ladder (`:sparql_update` / `:bulk` / `:per_call`) is upstream-internal;
+  MM exercises only the SPARQL-visible outcome, which is invariant across
+  modes. Operators wanting predictable behaviour across upgrades pin via
+  `MM_SEMANTICA_DISPATCH_MODE`; the env var contract has lifetime ≥ v1.0.
 - The Oxigraph version pinned by `sqlite-sparql` (MM tolerates Oxigraph
   bumps as long as the SPARQL semantics MM exercises stay stable — see
   `sqlite-sparql/CONSUMER_REQUIREMENT_MM.md`).

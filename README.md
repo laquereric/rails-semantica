@@ -145,20 +145,26 @@ Semantica::Sparql.construct(<<~SPARQL)
 SPARQL
 # => { ok: true, ntriples: "<urn:mm:product:EPET2850> <derived:hot> true .\n..." }
 
-# Write surface — INSERT DATA / DELETE DATA / CLEAR ALL.
-# v0.2.0 also recognises `DELETE WHERE { <s> <p> ?o }` as a public
-# form (read-replace by predicate). Arbitrary SPARQL UPDATE remains
-# post-v0.2.0; reach for the scalar functions (rdf_insert /
-# rdf_delete / etc.) directly if you need more.
+# Write surface — INSERT DATA / DELETE DATA / CLEAR ALL fast paths.
+# v0.2.0 added `DELETE WHERE { <s> <p> ?o }` as a public form.
+# v0.3.0 unlocks arbitrary SPARQL 1.1 UPDATE via the engine's
+# `sparql_update` scalar (signed net delta as `:count:`).
 Semantica::Sparql.execute(<<~SPARQL)
   INSERT DATA { <urn:mm:product:EPET2850> <schema:tag> "hot" . }
 SPARQL
-# => { ok: true, count: 1 }
+# => { ok: true, count: 1 }  (DATA-form fast path; always positive)
 
 Semantica::Sparql.execute(<<~SPARQL)
   DELETE WHERE { <urn:mm:product:EPET2850> <schema:tag> ?o }
 SPARQL
-# => { ok: true, count: <integer> }
+# => { ok: true, count: <integer> }  (v0.2.0 fast path)
+
+Semantica::Sparql.execute(<<~SPARQL)
+  DELETE { ?s <schema:tag> "stale" }
+  INSERT { ?s <schema:tag> "fresh" }
+  WHERE  { ?s <schema:tag> "stale" }
+SPARQL
+# => { ok: true, count: 0 }  (signed net delta: -N delete + N insert)
 ```
 
 Failure envelopes carry a verbatim because-clause:
@@ -168,9 +174,10 @@ Semantica::Sparql.select("SELEC bogus") # malformed
 # => { ok: false, reason: :sparql_parse_error, because: "..." }
 ```
 
-Pinned `:reason` symbols (v0.1.0 contract):
-`:sparql_parse_error`, `:extension_not_loaded`,
-`:ar_connection_error`, `:unexpected_error`.
+Pinned `:reason` symbols (v0.1.0): `:sparql_parse_error`,
+`:extension_not_loaded`, `:ar_connection_error`, `:unexpected_error`.
+v0.3.0 adds `:sparql_eval_error` (semantically-invalid UPDATE — the
+engine surfaces `"SPARQL evaluation error:"`).
 
 ## Why opt-in?
 
@@ -201,6 +208,13 @@ heading + a coordinated substrate bump):
 - `triple "pred", "<urn:literal-iri>"` literal-string second arg.
 - `TermSerializer.object(Hash | Array)` → JSON-encoded `xsd:string` literal.
 - `Semantica::Sparql.execute("DELETE WHERE { <s> <p> ?o }")` envelope `{ ok:, count: }`.
+
+**Pinned at v0.3.0** (additive on top of v0.2.0):
+
+- `Semantica::Sparql.execute(arbitrary_sparql_update)` envelope `{ ok:, count: <signed integer> }`. The four fast paths still return positive counts; the widening from unsigned to signed only affects the arbitrary-UPDATE fallback.
+- `Semantica::Sparql` `:reason` symbol `:sparql_eval_error`.
+- `Semantica::Storable.dispatch_mode` reader → `:sparql_update | :bulk | :per_call`. One-shot probe; cached process-wide; reset via `dispatch_mode_reset!`.
+- `MM_SEMANTICA_DISPATCH_MODE` env var forces a mode for predictable behaviour across upgrades (lifetime ≥ v1.0).
 
 **Still operator-fluid** (may change without deprecation cycle
 during v0.x.x):
@@ -237,6 +251,8 @@ isn't on disk.
   own roadmap to a shippable 0.1.0.
 - [`docs/plans/PLAN_0.2.0.md`](docs/plans/PLAN_0.2.0.md) — the v0.2.0
   DSL extensions (multi-subject, each blocks, JSON literals).
+- [`docs/plans/PLAN_0.3.0.md`](docs/plans/PLAN_0.3.0.md) — the v0.3.0
+  arbitrary-UPDATE pass-through + dispatch-mode ladder.
 - [`vendor/sqlite-sparql/README.md`](../sqlite-sparql/README.md) — the
   Rust SQLite extension this gem wraps.
 - [`docs/research/Semantica.md`](../../docs/research/Semantica.md) — the

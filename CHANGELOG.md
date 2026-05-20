@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.3.0 — (unreleased)
+## 0.3.0 — 2026-05-20
+
+Closes PLAN_0.3.0 against engine ≥ 0.5.0. Arbitrary SPARQL UPDATE
+unlocks via the engine's `sparql_update` scalar; `Storable`'s
+lifecycle hooks gain a three-mode dispatch ladder (`:sparql_update`
+collapses each predicate replacement to one round-trip). New pinned
+reason symbol `:sparql_eval_error`; new pinned reader
+`Storable.dispatch_mode`; new pinned env var
+`MM_SEMANTICA_DISPATCH_MODE`.
+
 
 PLAN_0.3.0 Phase B + C — `Storable.dispatch_mode` ladder.
 

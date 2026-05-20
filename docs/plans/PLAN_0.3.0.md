@@ -17,6 +17,27 @@
 | `PLAN_0.2.0.md` Phase E | this dir | Bulk write surface (`bulk_insert` / `bulk_delete`). Storable picks between the bulk path (0.2.0) and the UPDATE-with-WHERE path (0.3.0) at runtime — see Phase B below. |
 | `CONSUMER_REQUIREMENT_MM.md` | this dir | MM has not (yet) listed UPDATE-WHERE forms as a requested extension. v0.3.0 is engine-unblock-driven, not MM-driven; MM's consumption follows once the gem-side surface lands. |
 
+## Current state
+
+**Released as v0.3.0 (2026-05-20).** All five phases landed:
+
+- Phase A — `Sparql.execute` else-branch routes arbitrary UPDATE
+  through engine `sparql_update`; signed-delta `count:`;
+  `:sparql_eval_error` reason symbol.
+- Phase B — `Storable.dispatch_mode` ladder (`:sparql_update` /
+  `:bulk` / `:per_call`); `replace_predicate!` collapses to one
+  DELETE/INSERT WHERE round-trip in `:sparql_update` mode.
+- Phase C — contract additions (signed `:count:`,
+  `:sparql_eval_error`, `dispatch_mode` reader,
+  `MM_SEMANTICA_DISPATCH_MODE`) pinned.
+- Phase D — 24 new specs (105 total) covering arbitrary-UPDATE
+  pass-through + dispatch-mode parity + round-trip-count smoke.
+- Phase E — VERSION → 0.3.0; CHANGELOG `0.3.0` heading dated;
+  README + CONSUMER_REQUIREMENT_MM.md updated.
+
+`:bulk` rung of the ladder remains stubbed (falls through to
+`:per_call`) until PLAN_0.4.0 lands the bulk-write surface.
+
 ## Engine prerequisite (landed)
 
 `sqlite-sparql 0.5.0` ships:
