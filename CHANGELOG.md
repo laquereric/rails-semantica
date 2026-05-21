@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.7.0 — 2026-05-20
+
+Closes PLAN_0.7.0. Adds `Semantica::EtherealGraph`, a
+Rails-lifecycle-managed wrapper that scopes a named RDF graph to
+an AR record via Active Storage durability — without coupling the
+engine to a second persistent store.
+
+- **Phase A** — `Semantica::EtherealGraph` concern.
+  `ethereal_graph do; iri ->{...}; checkpoint_on :explicit|:save;
+  end` DSL captured via Recorder → frozen Declaration struct.
+  `has_one_attached :semantica_graph_blob` registered automatically
+  when Active Storage is available; operators without AS can supply
+  their own duck-typed attachment (any object responding to
+  `attached?` / `download` / `attach(io:, filename:, content_type:)`
+  / `purge`). `#hydrate_ethereal_graph!` parses the blob's
+  N-Triples body and batches into `Sparql.bulk_insert(raw: true)`
+  at 1000 rows/crossing; idempotent via a process-wide
+  `HYDRATED_IRIS` Set guarded by a Mutex. Early-returns
+  `:no_blob` / `:already_hydrated` / `:empty_blob` without engine
+  calls when appropriate.
+- **Phase B** — `#checkpoint_ethereal_graph!`. CONSTRUCTs every
+  triple in the scoped graph via `Sparql.construct(graph: iri)`,
+  purges the prior attachment, attaches a fresh
+  `application/n-triples` blob. Thread-local re-entrancy guard
+  breaks the callback loop the auto-flush would otherwise create
+  when `attach` itself fires `after_save`. `checkpoint_on: :save`
+  registers `after_save` so the blob flushes after every
+  successful save.
+- **Phase C** — `#retract_ethereal_graph!` registered as
+  `before_destroy`. Issues `CLEAR GRAPH <iri>` against the engine
+  and evicts the IRI from `HYDRATED_IRIS`. The standard
+  `has_one_attached … dependent: :purge_later` semantics handle
+  blob deletion. Retracting one record's graph leaves sibling
+  named graphs and the default graph untouched.
+- **Phase D** — `Semantica::Storable + EtherealGraph` composition.
+  No new production code; the composition is what falls out of
+  A + B + C. Spec asserts the round-trip (emit → checkpoint →
+  evict → re-hydrate → SPARQL sees every Storable-emitted
+  predicate) and pins the callback ordering — declare `triples do`
+  *before* `ethereal_graph do` so emit registers (and fires)
+  before checkpoint.
+- Active Storage is **not** added as a runtime gemspec dependency
+  — operators that include `Semantica::EtherealGraph` add
+  `activestorage` to their own Gemfile. The concern detects AS at
+  load time via `begin / rescue LoadError` and gracefully skips
+  `has_one_attached` wiring if absent.
+- New pinned `:reason` symbols: `:no_blob`, `:already_hydrated`,
+  `:empty_blob`, `:ethereal_graph_undeclared`. New pinned escape
+  hatch `Semantica::EtherealGraph.evict!(iri)` for multi-process
+  operators.
+- 22 new specs (159 total). Spec suite uses a duck-typed
+  `FakeBlobAttachment` rather than booting Active Storage
+  standalone — the concern is duck-typed against the attachment,
+  real Active Storage integration is the operator's app
+  responsibility.
+
 ## 0.6.0 — 2026-05-20
 
 Closes PLAN_0.6.0. Adapts the gem to the engine's shared-store

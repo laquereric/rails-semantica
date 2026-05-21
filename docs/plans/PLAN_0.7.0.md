@@ -10,6 +10,28 @@
 > durability + per-graph per-blob lifetime — without coupling the
 > engine to a second persistent store.*
 
+## Current state
+
+**Released as v0.7.0 (2026-05-20).** All six phases landed:
+
+- Phase A — `Semantica::EtherealGraph` concern + Recorder +
+  Declaration + `#hydrate_ethereal_graph!`. Active Storage
+  soft-optional (begin/rescue LoadError); auto-registers
+  `has_one_attached :semantica_graph_blob` when available.
+- Phase B — `#checkpoint_ethereal_graph!` with thread-local
+  re-entrancy guard; `checkpoint_on: :save` opt-in.
+- Phase C — `#retract_ethereal_graph!` registered as
+  `before_destroy`; graph-scoped via `CLEAR GRAPH <iri>`.
+- Phase D — `Semantica::Storable + EtherealGraph` composition
+  spec; pins callback ordering (declare `triples do` before
+  `ethereal_graph do`).
+- Phase E + F — 22 new specs (159 total). Spec suite uses a
+  duck-typed `FakeBlobAttachment` rather than booting Active
+  Storage standalone (Recommendation B from the implementation
+  discussion).
+- VERSION → 0.7.0; CHANGELOG `0.7.0` heading dated;
+  README + CONSUMER_REQUIREMENT_MM.md updated.
+
 ## Anchors
 
 | Anchor | Where | Role |

@@ -115,6 +115,22 @@ MM depends on:
 - An `emit_triples!` instance method for bulk re-emission
   (`Product.find_each(&:emit_triples!)` is MM's data-migration shape).
 
+### `Semantica::EtherealGraph` concern + DSL (v0.7.0) — optional
+
+Surface MM may consume for scopes that need a named RDF graph
+tied to an AR record's lifetime (e.g. Session, Workspace, Tenant
+contexts).
+
+- `include Semantica::EtherealGraph` — pinned name.
+- `ethereal_graph do; iri ->{...}; checkpoint_on :explicit|:save; end` — pinned DSL.
+- `#hydrate_ethereal_graph!` → `{ ok:, hydrated: <integer>, reason?: :no_blob | :already_hydrated | :empty_blob }`.
+- `#checkpoint_ethereal_graph!` → `{ ok:, written: <byte_count> }`.
+- `#retract_ethereal_graph!` registered as `before_destroy`; clears the named graph + evicts the IRI from `HYDRATED_IRIS`. Blob purges via `has_one_attached … dependent: :purge_later`.
+- `Semantica::EtherealGraph.evict!(iri)` — escape hatch for multi-process operators.
+- `has_one_attached :semantica_graph_blob` — pinned attachment name (auto-registered when Active Storage is available).
+- Active Storage is operator-supplied; MM's `Gemfile` must declare `activestorage ~> 8.0` for any scope that includes the concern.
+- Composes with `Semantica::Storable`: declare `triples do` *before* `ethereal_graph do` so the emit callback fires before checkpoint. Pinned by the composition spec.
+
 ### Versioning expectation
 
 While the gem is v0.x.x, surface refinements MM needs travel as upstream PRs

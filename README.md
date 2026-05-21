@@ -221,6 +221,54 @@ engine surfaces `"SPARQL evaluation error:"`). v0.5.0 adds
 `:invalid_graph` (blank-node graph IRIs) and `:invalid_dsl`
 (ambiguous DSL — e.g. `execute("CLEAR ALL", graph: …)`).
 
+### Ethereal graphs — `Semantica::EtherealGraph` (v0.7.0)
+
+Scope a named RDF graph to an Active Record record's lifetime.
+The blob lives in Active Storage; the engine holds the graph
+in-process; `hydrate` / `checkpoint` / `retract` are the three
+explicit lifecycle hooks.
+
+```ruby
+class WorkspaceContext < ApplicationRecord
+  include Semantica::EtherealGraph
+
+  ethereal_graph do
+    iri           -> { "urn:mm:workspace:#{id}:context" }
+    checkpoint_on :explicit   # :explicit (default) | :save
+  end
+end
+
+ctx = WorkspaceContext.create!
+ctx.hydrate_ethereal_graph!     # pulls blob → engine; idempotent
+Semantica::Sparql.execute(
+  'INSERT DATA { <urn:item:1> <schema:name> "Hi" . }',
+  graph: ctx.ethereal_graph_iri,
+)
+ctx.checkpoint_ethereal_graph!  # flushes engine → blob
+# … process restart …
+Semantica::EtherealGraph.evict!(ctx.ethereal_graph_iri)
+ctx.hydrate_ethereal_graph!     # restores from blob
+ctx.destroy!                    # CLEAR GRAPH + purges blob
+```
+
+- `checkpoint_on: :save` registers an `after_save` callback so
+  every save flushes the engine state to the blob. Paired with
+  `Semantica::Storable`, declare `triples do` *before*
+  `ethereal_graph do` so the emit callback registers (and fires)
+  before the checkpoint — otherwise the checkpoint captures stale
+  state.
+- The blob is an `application/n-triples` Active Storage
+  attachment named `semantica_graph_blob`. Active Storage is
+  opt-in — add `gem "activestorage"` to your Gemfile if you
+  include the concern. Operators without AS can omit it and
+  supply `semantica_graph_blob` themselves (any object responding
+  to `attached?` / `download` / `attach(io:, filename:,
+  content_type:)` / `purge`).
+- Hydration is process-wide via `HYDRATED_IRIS`. Multi-process
+  operators accept last-writer-wins on checkpoints;
+  `Semantica::EtherealGraph.evict!(iri)` is the explicit escape
+  hatch.
+
 ## Concurrency
 
 Engine ≥ 0.2.0 holds one Oxigraph store per process, shared across
@@ -308,6 +356,17 @@ heading + a coordinated substrate bump):
 - Cross-connection visibility property: a write from connection A is visible from connection B (same process), across threads, across named-graph scopes. Pinned by spec.
 - `Storable.dispatch_mode` concurrency contract: `:sparql_update` is atomic per predicate; `:bulk` and `:per_call` race under concurrent writes to the same `(subject, predicate)`. See `## Concurrency`.
 
+**Pinned at v0.7.0** (additive on top of v0.6.0):
+
+- `Semantica::EtherealGraph` concern.
+- `ethereal_graph do; iri ->{...}; checkpoint_on :explicit|:save; end` DSL.
+- `has_one_attached :semantica_graph_blob` (auto-registered when Active Storage is available; opt-in dependency).
+- `#hydrate_ethereal_graph!` → `{ ok:, hydrated: <integer>, reason?: :no_blob | :already_hydrated | :empty_blob }`.
+- `#checkpoint_ethereal_graph!` → `{ ok:, written: <byte_count> }`.
+- `#retract_ethereal_graph!` (registered as `before_destroy`).
+- `Semantica::EtherealGraph.evict!(iri)` escape hatch.
+- New `:reason` symbols: `:no_blob`, `:already_hydrated`, `:empty_blob`, `:ethereal_graph_undeclared`.
+
 **Still operator-fluid** (may change without deprecation cycle
 during v0.x.x):
 
@@ -352,6 +411,8 @@ isn't on disk.
 - [`docs/plans/PLAN_0.6.0.md`](docs/plans/PLAN_0.6.0.md) — the v0.6.0
   shared-store posture (`store_size` helper, `engine_version` reader,
   cross-connection visibility, concurrency note).
+- [`docs/plans/PLAN_0.7.0.md`](docs/plans/PLAN_0.7.0.md) — the v0.7.0
+  ethereal graphs (Active Storage-backed per-record named graphs).
 - [`vendor/sqlite-sparql/README.md`](../sqlite-sparql/README.md) — the
   Rust SQLite extension this gem wraps.
 - [`docs/research/Semantica.md`](../../docs/research/Semantica.md) — the
