@@ -552,7 +552,12 @@ module Semantica
       end
 
       def unwrap_iri(term)
-        return term unless term.start_with?("<") && term.end_with?(">")
+        # PLAN_0.8.0 Phase C — quoted-triple terms (`<< s p o >>`)
+        # are passed through verbatim; engine ≥ 0.7.0's
+        # `rdf_insert_many` accepts them in subject + object
+        # positions without bracket-stripping.
+        return term if term.is_a?(String) && term.start_with?("<<") && term.end_with?(">>")
+        return term unless term.is_a?(String) && term.start_with?("<") && term.end_with?(">")
         term[1..-2]
       end
 
@@ -646,6 +651,19 @@ module Semantica
           s, p, o, graph = extract_row(row, idx)
           validate_bulk_graph(graph, idx) if graph
 
+          # PLAN_0.8.0 Phase C — coerce quoted-triple shapes in
+          # subject + object positions. Accepts:
+          #   - Sparql::QuotedTriple marker (`Sparql.quoted_triple(s,p,o)`)
+          #   - 3-element nested Array `[s, p, o]` shorthand
+          # Predicate position stays IRI-only (W3C SPARQL-star
+          # disallows quoted triples there).
+          s = coerce_to_quoted_triple_(s, idx, position: "subject")
+          o = coerce_to_quoted_triple_(o, idx, position: "object")
+          if p.is_a?(::Semantica::Sparql::QuotedTriple) || (p.is_a?(Array) && p.length == 3)
+            raise InvalidDsl,
+                  "row #{idx}: predicate position must be an IRI (W3C SPARQL-star)"
+          end
+
           s_bare = unwrap_iri(::Semantica::Storable::TermSerializer.iri(s))
           p_bare = unwrap_iri(::Semantica::Storable::TermSerializer.predicate(p))
           o_term = ::Semantica::Storable::TermSerializer.object(o)
@@ -657,6 +675,25 @@ module Semantica
           else
             [s_bare, p_bare, o_engine]
           end
+        end
+      end
+
+      # PLAN_0.8.0 Phase C — recognise the nested-Array shorthand
+      # for quoted-triple subject/object positions; pass markers
+      # through; raise InvalidDsl for malformed shapes.
+      def coerce_to_quoted_triple_(term, idx, position:)
+        case term
+        when ::Semantica::Sparql::QuotedTriple
+          term
+        when Array
+          if term.length == 3
+            ::Semantica::Sparql.quoted_triple(term[0], term[1], term[2])
+          else
+            raise InvalidDsl,
+                  "row #{idx}: #{position} array form expects 3 elements (quoted triple); got #{term.length}"
+          end
+        else
+          term
         end
       end
 
