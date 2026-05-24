@@ -195,28 +195,100 @@ module Semantica
     private
 
     def semantica_emit_for_(subject_lambda, predicates, graph = nil)
-      subject_term = TermSerializer.iri(instance_exec(&subject_lambda))
+      subject_iri  = instance_exec(&subject_lambda)
+      subject_term = TermSerializer.iri(subject_iri)
       predicates.each do |pred|
         next if pred.if_lambda && !instance_exec(&pred.if_lambda)
         value = instance_exec(&pred.value_lambda)
+        predicate_term = TermSerializer.predicate(pred.iri)
+
         if value.nil?
-          retract_predicate!(subject_term, TermSerializer.predicate(pred.iri), graph)
-        else
-          replace_predicate!(
-            subject_term,
-            TermSerializer.predicate(pred.iri),
-            TermSerializer.object(value),
-            graph,
-          )
+          retract_predicate!(subject_term, predicate_term, graph)
+          # If parent value is nil, prior annotations dangle on the
+          # old quoted-triple subject — retract them via DELETE WHERE.
+          semantica_retract_orphan_annotations_(subject_iri, pred, graph)
+          next
         end
+
+        # PLAN_0.8.0 Phase B — retract any orphan annotations on
+        # the prior parent value's quoted-triple subject before
+        # writing the new parent triple. Safe-idempotent (no-op
+        # when the predicate carries no annotations, OR when the
+        # store is empty for this subject+predicate).
+        semantica_retract_orphan_annotations_(subject_iri, pred, graph)
+
+        replace_predicate!(
+          subject_term,
+          predicate_term,
+          TermSerializer.object(value),
+          graph,
+        )
+
+        # Emit annotations on the new quoted-triple subject.
+        semantica_emit_annotations_(subject_iri, pred, value, graph)
       end
     end
 
     def semantica_retract_for_(subject_lambda, predicates, graph = nil)
-      subject_term = TermSerializer.iri(instance_exec(&subject_lambda))
+      subject_iri  = instance_exec(&subject_lambda)
+      subject_term = TermSerializer.iri(subject_iri)
       predicates.each do |pred|
         retract_predicate!(subject_term, TermSerializer.predicate(pred.iri), graph)
+        # Retract any annotations whose subject is the quoted-triple
+        # form of this parent. The parent value at destroy time may
+        # not match what was originally emitted (object could have
+        # changed since); the safe pattern is `DELETE WHERE` against
+        # the quoted-triple subject with the annotation predicate as
+        # a variable.
+        semantica_retract_orphan_annotations_(subject_iri, pred, graph)
       end
+    end
+
+    # PLAN_0.8.0 Phase B — emit one triple per annotation declared
+    # on `pred`. Annotation subject = the quoted-triple form of the
+    # just-emitted parent. Annotation predicate = the operator's
+    # `annotate` IRI. Annotation object = the evaluator's result.
+    #
+    # Each annotation uses `replace_predicate!` so re-saves are
+    # idempotent (same parent value + same annotation value = no-op).
+    def semantica_emit_annotations_(parent_subject_iri, pred, parent_value, graph)
+      return if pred.annotations.nil? || pred.annotations.empty?
+
+      quoted_subject = ::Semantica::Sparql.quoted_triple(
+        parent_subject_iri, pred.iri, parent_value,
+      )
+      quoted_term = TermSerializer.iri(quoted_subject)
+
+      pred.annotations.each do |ann|
+        next if ann.if_lambda && !instance_exec(&ann.if_lambda)
+        ann_value = instance_exec(&ann.value_lambda)
+        next if ann_value.nil?
+
+        replace_predicate!(
+          quoted_term,
+          TermSerializer.predicate(ann.predicate_iri),
+          TermSerializer.object(ann_value),
+          graph,
+        )
+      end
+    end
+
+    # PLAN_0.8.0 Phase B — retract every annotation on the parent's
+    # quoted-triple subject regardless of current object value.
+    # SPARQL UPDATE: `DELETE { << s p ?o >> ?ap ?ao } WHERE { << s p ?o >> ?ap ?ao }`.
+    # Routes through `Sparql.execute` so the engine handles the
+    # quoted-triple match natively.
+    def semantica_retract_orphan_annotations_(parent_subject_iri, pred, graph)
+      return if pred.annotations.nil? || pred.annotations.empty?
+
+      subject_iri_form   = TermSerializer.iri(parent_subject_iri)
+      predicate_iri_form = TermSerializer.predicate(pred.iri)
+
+      update = <<~SPARQL
+        DELETE { << #{subject_iri_form} #{predicate_iri_form} ?__o >> ?__ap ?__ao }
+        WHERE  { << #{subject_iri_form} #{predicate_iri_form} ?__o >> ?__ap ?__ao }
+      SPARQL
+      ::Semantica::Sparql.execute(update, graph: graph)
     end
 
     # PLAN_0.2.0 Phase B emission: walk the collection, accumulate
@@ -503,9 +575,24 @@ module Semantica
       end
     end
 
-    Predicate = Struct.new(:iri, :value_lambda, :if_lambda) do
-      def initialize(iri:, value_lambda:, if_lambda: nil)
-        super(iri, value_lambda, if_lambda)
+    # PLAN_0.8.0 Phase B — `annotate` block on a `triple` declaration
+    # populates `annotations` with one Annotation per annotate call.
+    # Empty array when the triple has no `annotate` block (the
+    # common case).
+    Predicate = Struct.new(:iri, :value_lambda, :if_lambda, :annotations) do
+      def initialize(iri:, value_lambda:, if_lambda: nil, annotations: [])
+        super(iri, value_lambda, if_lambda, annotations.freeze)
+      end
+    end
+
+    # PLAN_0.8.0 Phase B — single annotation inside a `triple … do
+    # annotate p, ->{...}; end` block. The validator's evaluator
+    # is called at emission time with the parent triple's resolved
+    # (s, p, o) so the annotation can attach to a
+    # `Sparql.quoted_triple(s, p, o)` subject.
+    Annotation = Struct.new(:predicate_iri, :value_lambda, :if_lambda) do
+      def initialize(predicate_iri:, value_lambda:, if_lambda: nil)
+        super(predicate_iri, value_lambda, if_lambda)
       end
     end
 
@@ -533,17 +620,72 @@ module Semantica
       # triple "schema:name", -> { name }
       # triple "schema:gtin", -> { gtin }, if: -> { gtin.present? }
       # triple "rdf:type",    "<urn:mm:CategoryFolder>"          # literal value
-      def triple(iri, value_or_lambda, **opts)
+      #
+      # PLAN_0.8.0 Phase B — optional block with `annotate` calls
+      # attaches RDF-star annotations to the parent triple:
+      #
+      #   triple "schema:gtin", -> { gtin } do
+      #     annotate "mm:reportedBy", -> { "urn:mm:user:#{updater_id}" }
+      #     annotate "mm:reportedAt", -> { updated_at.iso8601 }
+      #   end
+      #
+      # The parent triple emits + each annotation emits a triple
+      # whose subject is the quoted-triple form of the parent.
+      # Parent `if:` false skips both the parent and all
+      # annotations. Update-time changes to the parent object
+      # orphan the prior quoted-triple subject — that's
+      # SPARQL-star referential opacity semantics (StarExts.md §3).
+      def triple(iri, value_or_lambda, **opts, &block)
+        annotations =
+          if block
+            sub = AnnotationRecorder.new
+            sub.instance_eval(&block)
+            sub.annotations
+          else
+            []
+          end
         @predicates << Predicate.new(
           iri: iri,
           value_lambda: as_callable(value_or_lambda),
           if_lambda: opts[:if],
+          annotations: annotations,
         )
       end
 
       # Wrap a literal value in a lambda so the emission path stays
       # uniform. Callables (Procs, lambdas) pass through.
       def as_callable(value_or_lambda)
+        if value_or_lambda.respond_to?(:call)
+          value_or_lambda
+        else
+          captured = value_or_lambda
+          -> { captured }
+        end
+      end
+    end
+
+    # PLAN_0.8.0 Phase B — recorder used inside a `triple … do …
+    # end` block to capture `annotate` calls.
+    class AnnotationRecorder
+      attr_reader :annotations
+
+      def initialize
+        @annotations = []
+      end
+
+      # annotate "mm:reportedBy", -> { user_iri }
+      # annotate "mm:confidence", -> { score }, if: -> { score.present? }
+      def annotate(predicate_iri, value_or_lambda, **opts)
+        @annotations << Annotation.new(
+          predicate_iri: predicate_iri,
+          value_lambda:  as_callable_annotation(value_or_lambda),
+          if_lambda:     opts[:if],
+        )
+      end
+
+      private
+
+      def as_callable_annotation(value_or_lambda)
         if value_or_lambda.respond_to?(:call)
           value_or_lambda
         else
@@ -661,9 +803,12 @@ module Semantica
       module_function
 
       # Wraps a value as an N-Triples IRI: `<iri>`. Pass-through if
-      # already wrapped.
+      # already wrapped. PLAN_0.8.0 Phase B: `Sparql::QuotedTriple`
+      # markers serialise to `<< s p o >>` N-Triples-star form.
       def iri(value)
+        return value.to_ntriples_star if value.is_a?(::Semantica::Sparql::QuotedTriple)
         s = value.to_s
+        return s if s.start_with?("<<") && s.end_with?(">>")
         return s if s.start_with?("<") && s.end_with?(">")
         "<#{s}>"
       end
@@ -692,9 +837,12 @@ module Semantica
       # cleanly. Operators reading back via Sparql.select can
       # `JSON.parse` the resulting literal value.
       def object(value)
+        return value.to_ntriples_star if value.is_a?(::Semantica::Sparql::QuotedTriple)
         case value
         when String
-          if value.start_with?("<") && value.end_with?(">")
+          if value.start_with?("<<") && value.end_with?(">>")
+            value
+          elsif value.start_with?("<") && value.end_with?(">")
             value
           else
             literal(value)

@@ -57,6 +57,46 @@ module Semantica
     # rescues this + emits the :invalid_dsl refusal envelope.
     class InvalidDsl < StandardError; end
 
+    # PLAN_0.8.0 Phase B — quoted-triple marker for operator-facing
+    # write paths. Pass a QuotedTriple wherever an IRI / value is
+    # expected (`Storable::DSL` `annotate`, `bulk_insert` row `:s` /
+    # `:o`); the TermSerializer recognises the marker + emits the
+    # `<< s p o >>` N-Triples-star encoding. Operators don't reach
+    # into `Storable::TermSerializer` — they call this module method.
+    QuotedTriple = Struct.new(:s, :p, :o) do
+      def initialize(s:, p:, o:)
+        super(s, p, o)
+        freeze
+      end
+
+      # N-Triples-star serialisation. Each term is serialised by the
+      # same TermSerializer the rest of the gem uses; recursion handles
+      # nested quoted triples (`<< << s p o >> p o >>`).
+      def to_ntriples_star
+        s_term = QuotedTriple.serialize_term(s, slot: :subject)
+        p_term = QuotedTriple.serialize_term(p, slot: :predicate)
+        o_term = QuotedTriple.serialize_term(o, slot: :object)
+        "<< #{s_term} #{p_term} #{o_term} >>"
+      end
+
+      def self.serialize_term(value, slot:)
+        return value.to_ntriples_star if value.is_a?(QuotedTriple)
+        case slot
+        when :subject, :predicate then ::Semantica::Storable::TermSerializer.iri(value)
+        else                          ::Semantica::Storable::TermSerializer.object(value)
+        end
+      end
+    end
+
+    # PLAN_0.8.0 Phase B contract — pinned module method.
+    # The presence of this method is what
+    # `Semantica.rdf_star_writes_enabled?` introspects, so once
+    # Phase B ships the capability predicate flips to true
+    # automatically.
+    def self.quoted_triple(s, p, o)
+      QuotedTriple.new(s: s, p: p, o: o)
+    end
+
     module_function
 
     # PLAN_0.13.0 Phase D — every Sparql facade method accepts
