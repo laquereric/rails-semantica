@@ -202,22 +202,36 @@ two-sided commitment.
 
 ### B1 — `EtherealGraph.parse_ntriples` must round-trip N-Triples-star
 
-**Severity: load-bearing.** The Conformer in VV's PLAN_0.2.0 writes
-RDF-star annotations into per-scope named graphs through `Sparql.execute`.
-Writes ✓, reads ✓, checkpoint-to-blob ✓. **Re-hydrate ✗** — the
-blob round-trip drops every line containing `<<>>`, because
-`parse_ntriples`
+**Severity: load-bearing. Status: scoped upstream 2026-05-24, implementation pending.**
+
+**Problem (original framing).** The Conformer in VV's PLAN_0.2.0
+writes RDF-star annotations into per-scope named graphs through
+`Sparql.execute`. Writes ✓, reads ✓, checkpoint-to-blob ✓.
+**Re-hydrate ✗** — the blob round-trip drops every line
+containing `<<>>`, because `parse_ntriples`
 (`lib/semantica/ethereal_graph.rb:235`) per-lines through
-`Sparql.split_ntriple` (whitespace-tokenizing), which sees `<<` as
-two separate `<` tokens.
+`Sparql.split_ntriple` (whitespace-tokenizing), which sees `<<`
+as two separate `<` tokens.
 
 **Net P1 envelope under rails-semantica 0.7.0:** scopes carrying
-Conformer-produced annotations cannot survive an evict + re-hydrate
-cycle. VV documents this as an operator-facing constraint in v0.2.0's
-README, but the constraint is awkward; it makes Silver effectively
-non-portable across process restarts when star content is present.
+Conformer-produced annotations cannot survive an evict +
+re-hydrate cycle. VV documents this as an operator-facing
+constraint in v0.2.0's README, but the constraint is awkward; it
+makes Silver effectively non-portable across process restarts
+when star content is present.
 
-**Suggested fix (one of several routes):**
+**Upstream response (2026-05-24).** `rails-semantica` rewrote
+PLAN_0.13.0 same-day to scope the fix as part of its expanded
+"VV-driven consumer alignment + Scope" framing. Implementation
+is pending in that plan. VV's regression spec
+(`vendor/vv-memory/spec/vv/memory/silver_star_passthrough_spec.rb`'s
+hydrate / checkpoint / evict / re-hydrate example) is marked
+`pending` with a verbatim upstream pointer and **un-pends
+automatically when the fix lands**. No further upstream push
+required from VV's side; the next move belongs to the
+PLAN_0.13.0 implementation.
+
+**Suggested-fix routes that informed the upstream scoping:**
 
 1. Delegate `parse_ntriples` to the engine's `rdf_load_ntriples`
    scalar — `sqlite-sparql` 0.7.0 added N-Triples-star support
@@ -229,39 +243,56 @@ non-portable across process restarts when star content is present.
    which then dispatches `rdf_insert_many` — `sqlite-sparql` 0.7.0
    accepts quoted-triple terms in the `_many` form.
 
-VV's regression is `spec/vv/memory/silver_star_passthrough_spec.rb`'s
-hydrate / checkpoint / evict / re-hydrate example, currently marked
-`pending` with a verbatim upstream pointer. The spec un-pends
-automatically on the fix.
+Either route satisfies VV's regression. Choice is upstream's
+to make; VV's contract is on the *behaviour* (hydrate round-trip
+of N-Triples-star content), not the implementation.
 
-**Scope note:** `rails-semantica` PLAN_0.8.0 as currently drafted
-does **not** include this fix. PLAN_0.8.0 Phase B is `Storable::DSL
-annotate(...)` and `Sparql.quoted_triple` marker — operator-facing
-write-path ergonomics. The hydrate-side fix is independent and would
-ideally land in a 0.7.x patch, not block on 0.8.0.
+**Downstream implication.** VV's `docs/plans/PLAN_0.3.0.md`
+(Gold tier + Curator) lists this fix as a **hard prerequisite**.
+The Gold `gold:facts` graph is annotation-heavy and cannot
+survive evict without the fix. The dependency chain is:
+`rails-semantica` PLAN_0.13.0 (B1 fix) → `vv-memory` PLAN_0.2.0
+Phase D integration spec (un-pends) → `vv-memory` PLAN_0.3.0
+implementation start.
 
 ### B2 — `annotate` DSL and `Sparql.quoted_triple` marker (PLAN_0.8.0 Phase B)
 
-**Severity: ergonomics.** VV's Conformer Writer under P1 interpolates
-raw SPARQL-star UPDATE strings into a heredoc and dispatches via
-`Sparql.execute`. This works and is currently the canonical shape
-inside `rails-semantica` itself (PLAN_0.9.0 / 0.10.0 / 0.12.0 Phase B
-implementations all emit RDF-star provenance the same way). Landing
-PLAN_0.8.0 Phase B turns the Writer's one method into a DSL block
-and lifts `after_destroy` annotation retraction into the framework.
-Welcome, not blocking. When it lands, VV's gemspec moves to
-`>= 0.8.0` lockstep with the Writer migration, gated behind
+**Severity: ergonomics. Status: scoped upstream (PLAN_0.8.0 Phase B), implementation pending.**
+
+VV's Conformer Writer under P1 interpolates raw SPARQL-star UPDATE
+strings into a heredoc and dispatches via `Sparql.execute`. This
+works and is currently the canonical shape inside `rails-semantica`
+itself (PLAN_0.9.0 / 0.10.0 / 0.12.0 Phase B implementations all
+emit RDF-star provenance the same way). Landing PLAN_0.8.0 Phase B
+turns the Writer's one method into a DSL block and lifts
+`after_destroy` annotation retraction into the framework. Welcome,
+not blocking. When it lands, VV's gemspec moves to `>= 0.8.0`
+lockstep with the Writer migration, gated behind
 `Vv::Memory.rdf_star_writes_enabled?`.
+
+The validation by sibling-gem example (PLAN_0.9.0 / 0.10.0 / 0.12.0
+Phase B all shipping raw `Sparql.execute` without waiting on this
+DSL) lowers the urgency: this is a Writer-internal ergonomics
+improvement when it arrives, not a semantic correction.
 
 ### B3 — `Semantica::Scope` value object (PLAN_0.13.0)
 
-**Severity: forward-compat.** PLAN_0.13.0 introduces a value-object
-generalisation of "this set of named graphs forms one reasoning
-scope." The eventual v0.3.0+ `Vv::Memory.recall(scope:, query:)`
-facade in VV will want to ride this rather than re-invent
-cross-graph semantics. No action required while PLAN_0.13.0 is
-plan-only / Phase A facade-only; flagged so VV's recall planning
-can anchor against the shipping shape rather than the draft one.
+**Severity: forward-compat. Status: ✅ closed 2026-05-24.**
+
+PLAN_0.13.0 introduces a value-object generalisation of "this set
+of named graphs forms one reasoning scope." The Scope value object
+landed in commit `2e44f35` alongside the Phase-A batch for v0.8.0
+through v0.12.0. PLAN_0.13.0 was rewritten same-day to anchor on
+the VV consumer signal, formalise the Scope contract, and ship
+the predicate-shaped capability advertisements
+(`Semantica.rdf_star_writes_enabled?` etc.) that VV's layering
+rule needs.
+
+The eventual VV v0.3.0+ `Curator` (`vendor/vv-memory/docs/plans/PLAN_0.3.0.md`)
+and v0.4.0+ recall facade (`vendor/vv-memory/docs/plans/PLAN_0.4.0.md`
+sketch) both anchor their cross-graph operations on `Semantica::Scope`
+rather than re-inventing scope semantics — the original ask of
+this boundary item.
 
 ## Behaviours VV does NOT depend on
 
