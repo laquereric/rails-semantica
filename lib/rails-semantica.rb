@@ -14,6 +14,7 @@ require_relative "semantica/ethereal_graph"
 require_relative "semantica/scope"
 require_relative "semantica/change_set"
 require_relative "semantica/reasoner"
+require_relative "semantica/shacl"
 require_relative "semantica/railtie" if defined?(::Rails::Railtie)
 
 module Semantica
