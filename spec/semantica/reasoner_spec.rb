@@ -19,11 +19,11 @@ RSpec.describe Semantica::Reasoner do
       expect(described_class::REASON_REASONER_DIVERGED).to eq(:reasoner_diverged)
     end
 
-    it "exposes Rule + RuleSet value objects and an empty Rules::OwlRl" do
+    it "exposes Rule + RuleSet value objects + a populated Rules::OwlRl (Phase B)" do
       expect(described_class::Rule).to be_a(Class)
       expect(described_class::RuleSet).to be_a(Class)
       expect(described_class::Rules::OwlRl).to be_a(described_class::RuleSet)
-      expect(described_class::Rules::OwlRl).to be_empty
+      expect(described_class::Rules::OwlRl.length).to be >= 15
     end
   end
 
@@ -76,21 +76,16 @@ RSpec.describe Semantica::Reasoner do
       expect(r[:because]).to include(":owl_2_rl")
     end
 
-    it "fixpoint-no-ops against the empty Rules::OwlRl (Phase A)" do
-      r = described_class.materialise!(asserted: "urn:a", inferred: "urn:b", rules: :owl_2_rl)
-      expect(r).to eq(ok: true, iterations: 0, derived: 0, fixpoint: true)
-    end
-
-    it "accepts a custom RuleSet — empty set fixpoints; non-empty Phase A refuses" do
+    it "accepts a custom RuleSet — empty set fixpoints immediately" do
       empty_set = described_class::RuleSet.new([])
       r = described_class.materialise!(asserted: "urn:a", inferred: "urn:b", rules: empty_set)
-      expect(r).to include(ok: true, fixpoint: true)
-
-      non_empty = described_class::RuleSet.new([
-        described_class::Rule.new(id: "x", name: "X", description: "x", sparql: "INSERT { } WHERE { }"),
-      ])
-      r = described_class.materialise!(asserted: "urn:a", inferred: "urn:b", rules: non_empty)
-      expect(r).to include(ok: false, reason: :reasoner_diverged)
+      expect(r).to include(ok: true, iterations: 0, derived: 0, fixpoint: true)
     end
+
+    # The "non-empty rule set returns a structured envelope"
+    # contract is exercised against a live engine in
+    # spec/semantica/reasoner_owl_rl_spec.rb. Here we only pin
+    # that the envelope shape on a no-AR-extension call is
+    # the existing :ar_connection_error refusal from Sparql.execute.
   end
 end
