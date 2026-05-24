@@ -169,11 +169,15 @@ module Semantica
     end
 
     def bulk_insert(rows, raw: false)
-      bulk_write(rows, "rdf_insert_many", :inserted, raw: raw)
+      result = bulk_write(rows, "rdf_insert_many", :inserted, raw: raw)
+      notify_change_set(:record_adds, rows) if result[:ok] && rows && !rows.empty?
+      result
     end
 
     def bulk_delete(rows, raw: false)
-      bulk_write(rows, "rdf_delete_many", :deleted, raw: raw)
+      result = bulk_write(rows, "rdf_delete_many", :deleted, raw: raw)
+      notify_change_set(:record_retracts, rows) if result[:ok] && rows && !rows.empty?
+      result
     end
 
     # PLAN_0.5.0 Phase A — validate graph IRIs at the gem boundary.
@@ -308,17 +312,25 @@ module Semantica
         case stripped
         when /\AINSERT\s+DATA\s*\{(.+)\}\s*\z/im
           body = Regexp.last_match(1).strip
-          if graph
-            insert_each_triple(connection, body, graph)
-          else
-            loaded = connection.select_value(
-              "SELECT rdf_load_ntriples(#{connection.quote(body)})",
-            )
-            loaded.to_i
-          end
+          count =
+            if graph
+              insert_each_triple(connection, body, graph)
+            else
+              connection.select_value(
+                "SELECT rdf_load_ntriples(#{connection.quote(body)})",
+              ).to_i
+            end
+          # PLAN_0.11.0 Phase A — notify change-set recorder of the
+          # adds. We parse the body's N-Triples to extract the row
+          # tuples; quoted-triple subjects (RDF-star) round-trip
+          # via the existing split_ntriple parser.
+          notify_change_set_from_ntriples(:record_adds, body, graph)
+          count
         when /\ADELETE\s+DATA\s*\{(.+)\}\s*\z/im
           body = Regexp.last_match(1).strip
-          delete_each_triple(connection, body, graph)
+          count = delete_each_triple(connection, body, graph)
+          notify_change_set_from_ntriples(:record_retracts, body, graph)
+          count
         when %r{\ADELETE\s+WHERE\s*\{\s*<([^>]+)>\s+<([^>]+)>\s+\?\w+\s*\.?\s*\}\s*\z}im
           # PLAN_0.2.0 Phase B — DELETE WHERE { <s> <p> ?o }: retract every triple
           # with the given subject + predicate regardless of object. Internal
@@ -471,6 +483,58 @@ module Semantica
       def unwrap_iri(term)
         return term unless term.start_with?("<") && term.end_with?(">")
         term[1..-2]
+      end
+
+      # PLAN_0.11.0 Phase A — change-set notification helpers.
+      #
+      # Module-level access points the public write paths call after
+      # a successful write. Both bypass when no recorder is active;
+      # both swallow ScopeMismatch silently (the gem's contract is
+      # that change-set capture is observational, never blocks the
+      # primary write). Operators wanting strict cross-scope refusal
+      # exercise the contract by inspecting the captured ChangeSet
+      # post-block.
+      def notify_change_set(method, rows)
+        return unless ::Semantica::ChangeSet.active?
+        ::Semantica::ChangeSet.send(method, normalize_rows_for_change_set(rows))
+      rescue ::Semantica::ChangeSet::ScopeMismatch
+        # Phase A swallows; promote to refusal in a later phase.
+        nil
+      end
+
+      def notify_change_set_from_ntriples(method, body, graph)
+        return unless ::Semantica::ChangeSet.active?
+        rows = parse_ntriples_rows(body, graph)
+        ::Semantica::ChangeSet.send(method, rows)
+      rescue ::Semantica::ChangeSet::ScopeMismatch
+        nil
+      end
+
+      # Convert bulk_insert/bulk_delete's accepted shapes (Array of
+      # Hash or Array of Array) into the [s, p, o, graph] tuple
+      # shape ChangeSet records.
+      def normalize_rows_for_change_set(rows)
+        rows.map do |row|
+          case row
+          when Hash
+            [row[:s] || row["s"], row[:p] || row["p"],
+             row[:o] || row["o"], row[:graph] || row["graph"]]
+          when Array
+            row.length == 3 ? [row[0], row[1], row[2], nil] : row[0, 4]
+          else
+            nil
+          end
+        end.compact
+      end
+
+      def parse_ntriples_rows(body, graph)
+        body.each_line.filter_map do |line|
+          line = line.strip.chomp(".").strip
+          next if line.empty?
+          terms = split_ntriple(line)
+          next unless terms && terms.length == 3
+          [unwrap_iri(terms[0]), unwrap_iri(terms[1]), terms[2], graph]
+        end
       end
 
       # PLAN_0.4.0 Phase A — shared backbone for bulk_insert /

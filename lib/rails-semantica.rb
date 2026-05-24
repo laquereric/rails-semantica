@@ -12,6 +12,7 @@ require_relative "semantica/sparql"
 require_relative "semantica/storable"
 require_relative "semantica/ethereal_graph"
 require_relative "semantica/scope"
+require_relative "semantica/change_set"
 require_relative "semantica/railtie" if defined?(::Rails::Railtie)
 
 module Semantica
