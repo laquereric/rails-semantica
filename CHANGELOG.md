@@ -1,28 +1,150 @@
 # Changelog
 
-## Unreleased
+## 0.13.0 — 2026-05-24
 
-- **Engine floor bumped to `sqlite-sparql ≥ 0.8.0`.** No live gem
-  code changes — the Phase-B materialise loops in
-  `Semantica::Reasoner` / `Semantica::Shacl` /
-  `Semantica::Shacl::Rules` stay on the per-rule `Sparql.execute`
-  path (the `lib/semantica/shacl/rules.rb` non-goal comment
-  already names `rdf_construct_many` as deferred-until-telemetry).
-  Plans PLAN_0.9.0 / PLAN_0.10.0 / PLAN_0.11.0 / PLAN_0.12.0 /
-  PLAN_0.13.0 all bump their `engine ≥ …` floor docstring and
-  the engine-CHANGELOG-section reference to 0.8.0.
-- **PLAN_0.12.0 (SHACL Rules) — batched-execution shape no
-  longer deferred.** Engine v0.8.0 ships `rdf_construct_many`,
-  the surface PLAN_0.12.0's "deferred batched rule execution"
-  note pencilled in as a future engine ask. The plan's "Engine
+Six PLANs land between 0.7.0 and 0.13.0 — every milestone in the
+"triples → quads → RDF-star → OWL → SHACL → cross-graph" arc the
+research notes (`docs/research/TripesQuadsEtc.md`,
+`magentic-market-ai/docs/research/StarExts.md`) sketched.
+PLAN_0.13.0 itself anchors the release on
+`CONSUMER_REQUIREMENT_VV.md` — the vv-memory side of the bridge —
+closing VV's B1 (load-bearing N-Triples-star hydrate fix) and B3
+(`Scope` value object surface).
+
+The engine floor moves to `sqlite-sparql ≥ 0.8.0`. No live gem
+behaviour depends on 0.8.0's new `rdf_construct_many` yet
+(PLAN_0.12.0's batched-execution path is opt-in and remains
+deferred until telemetry surfaces a bottleneck), but the
+materialise paths in `Semantica::Reasoner` /
+`Semantica::Shacl` / `Semantica::Shacl::Rules` rely on engine
+≥ 0.7.0's RDF-star + N-Triples-star round-trip, and the engine
+CHANGELOG floor in every plan now reads 0.8.0 lockstep.
+
+- **PLAN_0.8.0 Phase A** — SPARQL-star pass-through pin. Spec-only
+  (no production code): `Sparql.{select,ask,construct,execute}`
+  already pass quoted-triple syntax verbatim against engine 0.7.0.
+  Bindings come back as N-Triples-star strings, not the W3C
+  JSON-Results-for-RDF-star shape — operators destructure
+  `<< s p o >>` form themselves or call the engine's
+  `rdf_triple_subject` / `_predicate` / `_object` scalars.
+  Documents the `rdf_load_ntriples` line-strict gotcha (multi-line
+  `INSERT DATA` bodies must route through `INSERT WHERE`).
+- **PLAN_0.9.0 Phase A** — `Semantica::Reasoner` facade skeleton.
+  `materialise!(asserted:, inferred:, rules:, provenance:,
+  max_iterations:)` returns the v0.9.0 envelope; refusal symbols
+  `:invalid_graph`, `:invalid_dsl`, `:rule_set_unknown`,
+  `:reasoner_diverged`. `Rule` + `RuleSet` value objects.
+- **PLAN_0.9.0 Phase B** — OWL 2 RL core rule library + fixpoint
+  iteration. Ships 15 rules covering T-Box transitive closures
+  (`scm-sco`, `scm-spo`, `scm-eqc1`, `scm-eqp1`), A-Box propagation
+  (`cax-sco`, `prp-spo1`), domain/range (`prp-dom`, `prp-rng`),
+  property characteristics (`prp-trp`, `prp-symp`, `prp-inv1`,
+  `prp-inv2`, `prp-fp`), and sameAs closure (`eq-sym`, `eq-trans`).
+  The remaining ~55 W3C OWL 2 RL/RDF rules are catalogued in
+  `Rules::PHASE_B_PENDING` as mechanical transcriptions deferred
+  to Phase B.1/B.2. Each rule rewrites to the SPARQL 1.1 dataset
+  shape (`WITH <inferred> INSERT … USING <asserted> USING
+  <inferred> WHERE …`) via the iteration loop.
+- **PLAN_0.10.0 Phase A** — `Semantica::Shacl` facade skeleton.
+  `validate(data_graph:, shapes_graph:, report_graph:, provenance:)`
+  returns the v0.10.0 envelope. Refusal symbols
+  `:shape_parse_error`, `:unknown_constraint_component`,
+  `:cycle_detected`. `Constraint` + `ConstraintLibrary` value
+  objects.
+- **PLAN_0.10.0 Phase B** — SHACL Core validator engine + 12
+  constraint components (`sh:minCount`, `sh:maxCount`,
+  `sh:datatype`, `sh:nodeKind`, `sh:class`, `sh:pattern`,
+  `sh:minLength`, `sh:maxLength`, `sh:in`, `sh:hasValue`,
+  `sh:minInclusive`, `sh:maxInclusive`). Validator walks
+  shapes_graph, resolves targets via `sh:targetClass` /
+  `sh:targetNode`, evaluates per-property-shape constraints via
+  Ruby evaluator callables, writes a W3C-conformant
+  `sh:ValidationReport` graph. ~18 remaining components in
+  `Constraints::PHASE_B_PENDING`; the validator refuses
+  `:unknown_constraint_component` against them rather than
+  silently conforming.
+- **PLAN_0.11.0 Phase A** — `Semantica::ChangeSet` value object +
+  `capture(scope:) { ... }` block API. Records adds and retracts
+  from `Sparql.execute INSERT DATA / DELETE DATA` and
+  `bulk_insert` / `bulk_delete` write paths via a thread-local
+  recorder. Arbitrary SPARQL UPDATE forms (`INSERT WHERE`,
+  `MOVE`, `COPY`, etc.) cannot be observed without re-querying —
+  operators call `ChangeSet.record_add` / `record_retract`
+  manually for those, or upgrade to a future phase. Storable
+  lifecycle integration deferred. Nested captures refuse with
+  `NestedCaptureError`; cross-scope writes raise `ScopeMismatch`
+  (swallowed silently in the Sparql notify path — observational,
+  never blocks the primary write).
+- **PLAN_0.12.0 Phase A** — `Semantica::Shacl::Rules` facade
+  skeleton. `materialise!` envelope shape; refusal symbols
+  `:rule_parse_error`, `:unknown_rule_type`,
+  `:condition_shape_missing`. `Rule` / `TripleRule` / `SparqlRule`
+  value-object hierarchy.
+- **PLAN_0.12.0 Phase B** — SHACL Rules materialisation engine.
+  Rule discovery via `?shape sh:rule ?rule . ?rule rdf:type ?type`
+  against shapes_graph. `sh:TripleRule` (with `sh:this` / IRI /
+  literal terms) and `sh:SPARQLRule` (with `?this` textual
+  substitution in CONSTRUCT + WHERE blocks) both ride the same
+  SPARQL 1.1 dataset shape as PLAN_0.9.0's reasoner
+  (`WITH <inferred> INSERT … USING <data_graph> USING <inferred>
+  WHERE …`). `sh:order` ordering, `sh:deactivated` skip,
+  `sh:condition` gating via recursive `Shacl.validate` against a
+  transient shapes graph carrying `sh:targetNode <focus>`.
+  `sh:JSRule` refuses with `:unknown_rule_type`. Fixpoint
+  iteration with `max_iterations` guard matches the reasoner
+  pattern. Per-rule provenance annotations deferred to Phase E.
+- **PLAN_0.13.0 Phase A** — predicate-shaped capability
+  advertisements (`lib/semantica/capabilities.rb`):
+  `Semantica.rdf_star_writes_enabled?` (introspects whether
+  `Sparql.quoted_triple` is defined — flips automatically when
+  PLAN_0.8.0 Phase B lands), `Semantica.facade_version`
+  (capability epoch; currently identical to `VERSION`),
+  `Semantica.checkpoint_can_round_trip?(content_kind:)`
+  (`:plain_ntriples` / `:ntriples_star`; raises `ArgumentError`
+  for unknown kinds). VV's `Vv::Memory.rdf_star_writes_enabled?`
+  delegates to the upstream predicate.
+- **PLAN_0.13.0 Phase B** — `EtherealGraph.parse_ntriples`
+  N-Triples-star round-trip (closes `CONSUMER_REQUIREMENT_VV.md`
+  B1). `Sparql.split_ntriple` becomes balanced-bracket-aware on
+  `<<` / `>>` pairs via the new `take_quoted_triple_term` helper
+  (additive — single-bracket IRI logic unchanged).
+  `EtherealGraph#strip_brackets_` leaves `<< s p o >>` tokens
+  alone so they reach `rdf_insert_many` via
+  `bulk_insert(raw: true)`. VV's `silver_star_passthrough`
+  hydrate test un-pends against this release.
+  `Semantica.checkpoint_can_round_trip?(:ntriples_star)` flips
+  to `true`.
+- **PLAN_0.13.0 Phase C** — Scope contract formalisation. The
+  five-role `Semantica::Scope` value object (shipped in commit
+  `2e44f35`) is pinned at v0.13.0 release. New
+  `Semantica::Scope.from_(graph_iri)` factory returns a
+  degenerate single-graph Scope; per-facade required-role
+  validation still applies on subsequent facade calls.
+- **PLAN_0.13.0 Phase D** — `scope:` kwarg on the four facade
+  families. `Sparql.{select,ask,construct,execute}`,
+  `Reasoner.materialise!`, `Shacl.validate`,
+  `Shacl::Rules.materialise!` all accept either the existing
+  per-graph kwargs or a `scope:` (`Semantica::Scope`) alternative.
+  New `Semantica::Scope::FacadeAdapter` shared resolver. Refusal
+  symbols pinned: `:scope_kwarg_conflict`, `:scope_role_missing`,
+  `:scope_read_write_overlap`. Per-facade equivalence specs
+  assert identical output across both calling conventions.
+- **Engine floor** bumped to `sqlite-sparql ≥ 0.8.0`. PLAN_0.12.0
+  (SHACL Rules) — batched-execution shape no longer deferred at
+  the engine side. Engine v0.8.0 ships `rdf_construct_many`, the
+  surface PLAN_0.12.0's "deferred batched rule execution" note
+  pencilled in as a future engine ask. The plan's "Engine
   prerequisites" section now documents two implementation
   shapes — the per-rule path (`sparql_update` per rule per
   iteration, default for Phase B) and the batched path
   (`rdf_construct_many` once per iteration, opt-in, worthwhile
   at ~20+ rules per shape). Adoption stays gated on a concrete
-  bottleneck signal from MM. Both shapes produce identical
-  asserted graphs + RDF-star annotations; the equivalence is
-  pinned by a planned cross-shape spec.
+  bottleneck signal from MM. Both shapes will produce identical
+  asserted graphs + RDF-star annotations once batched lands; the
+  equivalence is pinned by a planned cross-shape spec.
+
+Specs: 159 → 314 (+155 across all six plans' Phase A/B work).
+`bin/check` green against engine ≥ 0.8.0.
 
 ## 0.7.0 — 2026-05-20
 
