@@ -18,37 +18,39 @@ RSpec.describe Semantica::Shacl do
       expect(described_class::REASON_CYCLE_DETECTED).to               eq(:cycle_detected)
     end
 
-    it "exposes Constraint + ConstraintLibrary + an empty Constraints::Core" do
+    it "exposes Constraint + ConstraintLibrary + a populated Constraints::Core (Phase B)" do
       expect(described_class::Constraint).to be_a(Class)
       expect(described_class::ConstraintLibrary).to be_a(Class)
       expect(described_class::Constraints::Core).to be_a(described_class::ConstraintLibrary)
-      expect(described_class::Constraints::Core).to be_empty
+      expect(described_class::Constraints::Core.length).to be >= 12
     end
   end
 
   describe "Constraint value object" do
-    it "is keyword-init + frozen" do
+    it "is keyword-init + frozen with the Phase B shape" do
       c = described_class::Constraint.new(
-        iri:        "http://www.w3.org/ns/shacl#MinCountConstraintComponent",
-        name:       "sh:minCount",
-        parameters: [:min_count],
-        validates:  "SELECT (COUNT(?o) AS ?n) WHERE { ?focus ?path ?o } GROUP BY ?focus",
-        default_message: ->(min, n) { "expected ≥ #{min}; got #{n}" },
+        iri:       "http://www.w3.org/ns/shacl#MinCountConstraintComponent",
+        name:      "sh:minCount",
+        parameter: "http://www.w3.org/ns/shacl#minCount",
+        evaluator: ->(focus:, values:, parameter:, **) {
+          values.length < parameter.to_i ? "too few" : nil
+        },
       )
       expect(c).to be_frozen
       expect(c.iri).to include("MinCount")
+      expect(c.parameter).to include("minCount")
     end
   end
 
   describe "ConstraintLibrary value object" do
-    it "is composable by + and keyed by IRI" do
+    it "is composable by + and keyed by IRI / parameter" do
       c1 = described_class::Constraint.new(
-        iri: "urn:mc:A", name: "A", parameters: [], validates: "ASK { }",
-        default_message: ->(*) { "a" },
+        iri: "urn:mc:A", name: "A", parameter: "urn:param:A",
+        evaluator: ->(**) { nil },
       )
       c2 = described_class::Constraint.new(
-        iri: "urn:mc:B", name: "B", parameters: [], validates: "ASK { }",
-        default_message: ->(*) { "b" },
+        iri: "urn:mc:B", name: "B", parameter: "urn:param:B",
+        evaluator: ->(**) { nil },
       )
       a = described_class::ConstraintLibrary.new([c1])
       b = described_class::ConstraintLibrary.new([c2])
@@ -56,6 +58,7 @@ RSpec.describe Semantica::Shacl do
       expect(combined.length).to eq(2)
       expect(combined["urn:mc:A"]).to eq(c1)
       expect(combined["urn:mc:B"]).to eq(c2)
+      expect(combined.by_parameter("urn:param:A")).to eq(c1)
     end
 
     it "is frozen after construction" do
