@@ -59,6 +59,17 @@ module Semantica
       PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
     SPARQL
 
+    # PLAN_0.9.0 Phase E — RDF-star provenance annotation predicates.
+    # Pinned IRIs operators query against
+    # (`SELECT ?inferred_triple WHERE { ... . << ?inferred >> <PROV_DERIVED_BY> <rule_iri> }`).
+    PROV_DERIVED_BY   = "urn:semantica:derivedBy"
+    PROV_DERIVED_AT   = "urn:semantica:derivedAt"   # reserved for Phase E.1
+    PROV_DERIVED_FROM = "urn:semantica:derivedFrom" # reserved for Phase E.1
+
+    def self.rule_iri(rule_id)
+      "urn:semantica:reasoner:rule:#{rule_id}"
+    end
+
     # Phase B value object. Carries the W3C OWL 2 RL rule's
     # metadata + the SPARQL UPDATE form. `sparql:` is the
     # graph-agnostic body (an `INSERT { … } WHERE { … }`); the
@@ -392,7 +403,7 @@ module Semantica
       # exit returns `:reasoner_diverged` with the iterations
       # count so operators can re-run with a higher cap or inspect
       # which rules are still firing.
-      def run_fixpoint(rule_set, asserted, inferred, _provenance, max_iterations)
+      def run_fixpoint(rule_set, asserted, inferred, provenance, max_iterations)
         return { ok: true, iterations: 0, derived: 0, fixpoint: true, per_rule: {} } if rule_set.empty?
 
         total_derived = 0
@@ -405,7 +416,9 @@ module Semantica
           iteration_delta = 0
 
           rule_set.each do |rule|
-            result = ::Semantica::Sparql.execute(rewrite_rule(rule, asserted, inferred))
+            result = ::Semantica::Sparql.execute(
+              rewrite_rule(rule, asserted, inferred, provenance: provenance),
+            )
             unless result[:ok]
               # Surface engine errors verbatim — a rule that can't
               # parse against the engine is a contract failure;
@@ -449,7 +462,7 @@ module Semantica
       #   USING <inferred>
       # Plus the shared PREFIX preamble so rule bodies can use
       # rdfs:, rdf:, owl: shorthand.
-      def rewrite_rule(rule, asserted, inferred)
+      def rewrite_rule(rule, asserted, inferred, provenance: true)
         body = rule.sparql.strip
 
         # Split the rule body at INSERT { ... } / WHERE { ... } so
@@ -465,6 +478,22 @@ module Semantica
         insert_block = m[1].strip
         where_block  = m[2].strip
 
+        # PLAN_0.9.0 Phase E (cut 1) — append provenance
+        # annotations to the INSERT block. For each derived triple
+        # pattern in the original INSERT, emit
+        # `<< s p o >> <derivedBy> <rule_iri>`. Engine dedupes
+        # constant annotation triples → idempotent across reruns.
+        #
+        # `:derivedAt NOW()` + `:derivedFrom << premise >>` are
+        # documented Phase E.1 work: timestamps break read-replace
+        # idempotency without a FILTER NOT EXISTS guard, and
+        # premise references need explicit variable-position
+        # bookkeeping per rule. Cut 1 lands `:derivedBy` only —
+        # enough for rule-attribution queries against the closure.
+        if provenance
+          insert_block = build_insert_block_with_provenance(rule, insert_block)
+        end
+
         <<~SPARQL
           #{PREFIX_PREAMBLE}
           WITH <#{inferred}>
@@ -473,6 +502,40 @@ module Semantica
           USING <#{inferred}>
           WHERE  { #{where_block} }
         SPARQL
+      end
+
+      # PLAN_0.9.0 Phase E (cut 1) — split the rule's INSERT block
+      # into individual triple patterns (separated by `.`), then
+      # append one `<< pattern >> <derivedBy> <rule_iri>` per
+      # parent. Handles multi-triple INSERTs (scm-eqc1 /
+      # scm-eqp1) — each derived triple gets its own annotation.
+      def build_insert_block_with_provenance(rule, insert_block)
+        # Each triple pattern terminates on `.` not inside `<...>`,
+        # `"..."`, or `<<...>>`. The rules library uses only ground
+        # IRIs / variable refs / `rdfs:Foo` shorthand, so a simple
+        # split on `.` between balanced contexts is sufficient.
+        patterns = split_triple_patterns(insert_block)
+        rule_iri_term = "<#{::Semantica::Reasoner.rule_iri(rule.id)}>"
+
+        annotated =
+          patterns.map do |pat|
+            "<< #{pat} >> <#{PROV_DERIVED_BY}> #{rule_iri_term} ."
+          end
+
+        # The rule's original parent triples + the per-parent
+        # annotation triples, joined by ` . ` for readability.
+        ([patterns.map { |p| "#{p} ." } + annotated]).join.then do |_|
+          (patterns.map { |p| "#{p} ." } + annotated).join("\n  ")
+        end
+      end
+
+      # Tokenize an INSERT block into individual triple patterns.
+      # Strips trailing `.` from each. Skips empty segments.
+      def split_triple_patterns(insert_block)
+        # Strip outer whitespace, split on `.` followed by whitespace.
+        # Each result is one triple pattern. We then re-strip and
+        # discard empties.
+        insert_block.split(/\.\s*(?=\S|$)/).map(&:strip).reject(&:empty?)
       end
 
       def refused(reason, because)
