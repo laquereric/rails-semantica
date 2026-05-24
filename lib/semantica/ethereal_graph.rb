@@ -251,8 +251,14 @@ module Semantica
       end
 
       def strip_brackets_(term)
-        return term unless term.is_a?(String) && term.start_with?("<") && term.end_with?(">")
-        term[1..-2]
+        return term unless term.is_a?(String)
+        # PLAN_0.13.0 Phase B — quoted-triple terms (`<< s p o >>`)
+        # are passed through verbatim; the engine's
+        # `rdf_insert_many` (sqlite-sparql 0.7.0+) accepts them in
+        # subject and object positions without bracket-stripping.
+        return term if term.start_with?("<<")
+        return term[1..-2] if term.start_with?("<") && term.end_with?(">")
+        term
       end
     end
 

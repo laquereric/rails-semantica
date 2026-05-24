@@ -59,7 +59,20 @@ module Semantica
 
     module_function
 
-    def select(query, graph: nil)
+    # PLAN_0.13.0 Phase D — every Sparql facade method accepts
+    # either the per-kwarg `graph:` (PLAN_0.5.0 shape) or a
+    # `scope:` (Semantica::Scope value object). The Scope's
+    # `data:` role maps to `graph:`. Passing both refuses with
+    # `:scope_kwarg_conflict`.
+    SPARQL_SCOPE_MAPPING = { data: :graph }.freeze
+
+    def select(query, graph: nil, scope: nil)
+      resolved = ::Semantica::Scope::FacadeAdapter.resolve(
+        scope: scope, kwargs: { graph: graph }, mapping: SPARQL_SCOPE_MAPPING,
+      )
+      return resolved unless resolved.is_a?(Hash) && resolved[:kwargs]
+      graph = resolved[:kwargs][:graph]
+
       graph_error = validate_graph(graph)
       return graph_error if graph_error
 
@@ -71,7 +84,13 @@ module Semantica
       end
     end
 
-    def ask(query, graph: nil)
+    def ask(query, graph: nil, scope: nil)
+      resolved = ::Semantica::Scope::FacadeAdapter.resolve(
+        scope: scope, kwargs: { graph: graph }, mapping: SPARQL_SCOPE_MAPPING,
+      )
+      return resolved unless resolved.is_a?(Hash) && resolved[:kwargs]
+      graph = resolved[:kwargs][:graph]
+
       graph_error = validate_graph(graph)
       return graph_error if graph_error
 
@@ -82,7 +101,13 @@ module Semantica
       end
     end
 
-    def construct(query, graph: nil)
+    def construct(query, graph: nil, scope: nil)
+      resolved = ::Semantica::Scope::FacadeAdapter.resolve(
+        scope: scope, kwargs: { graph: graph }, mapping: SPARQL_SCOPE_MAPPING,
+      )
+      return resolved unless resolved.is_a?(Hash) && resolved[:kwargs]
+      graph = resolved[:kwargs][:graph]
+
       graph_error = validate_graph(graph)
       return graph_error if graph_error
 
@@ -102,7 +127,13 @@ module Semantica
     # `graph:` is set on an arbitrary UPDATE path, the gem prepends
     # `WITH <graph>` to the query — SPARQL 1.1's graph-scoping prefix
     # for INSERT / DELETE / INSERT WHERE / DELETE WHERE forms.
-    def execute(query, graph: nil)
+    def execute(query, graph: nil, scope: nil)
+      resolved = ::Semantica::Scope::FacadeAdapter.resolve(
+        scope: scope, kwargs: { graph: graph }, mapping: SPARQL_SCOPE_MAPPING,
+      )
+      return resolved unless resolved.is_a?(Hash) && resolved[:kwargs]
+      graph = resolved[:kwargs][:graph]
+
       graph_error = validate_graph(graph)
       return graph_error if graph_error
 
@@ -633,6 +664,14 @@ module Semantica
       def take_term(rest)
         case rest[0]
         when "<"
+          # PLAN_0.13.0 Phase B — recognise `<< s p o >>` as a
+          # single token in subject or object position (N-Triples-star).
+          # Balanced-bracket counting on `<<`/`>>` pairs; single
+          # `<`/`>` characters inside the quoted triple (IRI brackets)
+          # don't change the depth.
+          if rest.start_with?("<<")
+            return take_quoted_triple_term(rest)
+          end
           close = rest.index(">")
           return [nil, nil] unless close
           [rest[0..close], rest[(close + 1)..]]
@@ -667,6 +706,29 @@ module Semantica
         else
           [nil, nil]
         end
+      end
+
+      # PLAN_0.13.0 Phase B — consume a `<< s p o >>` quoted-triple
+      # term, supporting nesting. The caller guarantees `rest`
+      # starts with `<<`. Scans forward counting `<<` opens and
+      # `>>` closes; returns the [token, remainder] pair when
+      # depth returns to 0, [nil, nil] if the input is unbalanced.
+      def take_quoted_triple_term(rest)
+        depth = 1
+        i = 2
+        while i < rest.length
+          if rest[i, 2] == "<<"
+            depth += 1
+            i += 2
+          elsif rest[i, 2] == ">>"
+            depth -= 1
+            return [rest[0..(i + 1)], rest[(i + 2)..]] if depth.zero?
+            i += 2
+          else
+            i += 1
+          end
+        end
+        [nil, nil]  # unbalanced
       end
     end
   end

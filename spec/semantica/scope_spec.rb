@@ -138,4 +138,26 @@ RSpec.describe Semantica::Scope do
       expect(described_class.find_by_data("urn:nope")).to be_nil
     end
   end
+
+  describe ".from_ factory (Phase C)" do
+    it "returns a degenerate Scope with that IRI as data: and other roles nil" do
+      scope = described_class.from_("urn:foo")
+      expect(scope.data).to eq("urn:foo")
+      expect(scope.schema).to be_nil
+      expect(scope.shapes).to be_nil
+      expect(scope.inferred).to be_nil
+      expect(scope.report).to be_nil
+      expect(scope.additional).to eq({})
+    end
+
+    it "is read-graphs = {data} and write-graphs = empty" do
+      scope = described_class.from_("urn:foo")
+      expect(scope.read_graphs).to contain_exactly("urn:foo")
+      expect(scope.write_graphs).to be_empty
+    end
+
+    it "is value-equal to an explicit Scope.new(data: iri)" do
+      expect(described_class.from_("urn:foo")).to eq(described_class.new(data: "urn:foo"))
+    end
+  end
 end

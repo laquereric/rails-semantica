@@ -365,10 +365,32 @@ module Semantica
       ])
     end
 
+    # PLAN_0.13.0 Phase D — Shacl.validate accepts either the
+    # per-kwarg trio or a `scope:` (Semantica::Scope). Scope's
+    # `data:` → `data_graph:`, `shapes:` → `shapes_graph:`,
+    # `report:` → `report_graph:`. Required scope roles: data + shapes.
+    SHACL_SCOPE_MAPPING = {
+      data: :data_graph, shapes: :shapes_graph, report: :report_graph,
+    }.freeze
+    SHACL_REQUIRED_ROLES = %i[data shapes].freeze
+
     module_function
 
-    def validate(data_graph:, shapes_graph:, report_graph: nil, provenance: true,
+    def validate(data_graph: nil, shapes_graph: nil, report_graph: nil,
+                 scope: nil, provenance: true,
                  constraint_library: Constraints::Core)
+      resolved = ::Semantica::Scope::FacadeAdapter.resolve(
+        scope: scope,
+        kwargs: { data_graph: data_graph, shapes_graph: shapes_graph,
+                  report_graph: report_graph },
+        mapping: SHACL_SCOPE_MAPPING,
+        required: SHACL_REQUIRED_ROLES,
+      )
+      return resolved unless resolved.is_a?(Hash) && resolved[:kwargs]
+      data_graph   = resolved[:kwargs][:data_graph]
+      shapes_graph = resolved[:kwargs][:shapes_graph]
+      report_graph = resolved[:kwargs][:report_graph]
+
       graph_error = validate_graphs(data_graph, shapes_graph, report_graph)
       return graph_error if graph_error
 

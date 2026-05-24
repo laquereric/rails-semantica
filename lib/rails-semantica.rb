@@ -16,6 +16,7 @@ require_relative "semantica/change_set"
 require_relative "semantica/reasoner"
 require_relative "semantica/shacl"
 require_relative "semantica/shacl/rules"
+require_relative "semantica/capabilities"
 require_relative "semantica/railtie" if defined?(::Rails::Railtie)
 
 module Semantica

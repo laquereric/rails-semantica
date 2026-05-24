@@ -323,10 +323,27 @@ module Semantica
       ])
     end
 
+    # PLAN_0.13.0 Phase D — Reasoner accepts either the per-kwarg
+    # asserted: / inferred: pair or a `scope:` (Semantica::Scope).
+    # Scope's `data:` → `asserted:`, `inferred:` → `inferred:`.
+    REASONER_SCOPE_MAPPING = { data: :asserted, inferred: :inferred }.freeze
+    REASONER_REQUIRED_ROLES = %i[data inferred].freeze
+
     module_function
 
-    def materialise!(asserted:, inferred:, rules: :owl_2_rl,
+    def materialise!(asserted: nil, inferred: nil, scope: nil,
+                     rules: :owl_2_rl,
                      provenance: true, max_iterations: DEFAULT_MAX_ITERATIONS)
+      resolved = ::Semantica::Scope::FacadeAdapter.resolve(
+        scope: scope,
+        kwargs: { asserted: asserted, inferred: inferred },
+        mapping: REASONER_SCOPE_MAPPING,
+        required: REASONER_REQUIRED_ROLES,
+      )
+      return resolved unless resolved.is_a?(Hash) && resolved[:kwargs]
+      asserted = resolved[:kwargs][:asserted]
+      inferred = resolved[:kwargs][:inferred]
+
       graph_error = validate_graphs(asserted, inferred)
       return graph_error if graph_error
 

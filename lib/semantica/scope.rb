@@ -62,6 +62,20 @@ module Semantica
       def find_by_data(iri)
         registry.find { |scope| scope.data == iri }
       end
+
+      # PLAN_0.13.0 Phase C — convenience factory for the
+      # single-graph case. Returns a degenerate Scope with
+      # `graph_iri` as `data:` and every other role nil.
+      # Lets consumers port per-kwarg call sites to the `scope:`
+      # surface incrementally — start with just `data:`, fill
+      # in `schema:` / `inferred:` / etc. later.
+      #
+      # Per-facade required-role validation still applies; if
+      # the facade needs a role the degenerate Scope doesn't
+      # declare, it refuses with `:scope_role_missing`.
+      def from_(graph_iri)
+        new(data: graph_iri)
+      end
     end
 
     def initialize(data:, schema: nil, shapes: nil, inferred: nil, report: nil, additional: {})
@@ -109,4 +123,70 @@ module Semantica
     end
     alias_method :==, :eql?
   end
+
+  # PLAN_0.13.0 Phase D — shared helper for facade methods
+  # accepting both per-kwarg and `scope:` calling conventions.
+  #
+  # Given a Scope (or nil) + the facade's current per-kwarg hash
+  # + a role-to-kwarg mapping + a required-roles list, returns
+  # either a translated kwargs Hash or a refusal envelope.
+  #
+  # The three pinned refusal symbols:
+  #   :scope_kwarg_conflict     — caller passed scope: + an overlapping kwarg
+  #   :scope_role_missing       — scope omits a role the facade needs
+  #   :scope_read_write_overlap — scope's read/write graphs overlap
+  #
+  # Named under `Semantica::Scope::FacadeAdapter` despite living
+  # outside the Struct block — Struct.new's block doesn't reliably
+  # define nested constants, so the module sits next to Scope and
+  # is aliased into Scope's namespace below.
+  module FacadeAdapter
+    module_function
+
+    # @return [Hash] either `{ kwargs: <Hash> }` (proceed with the
+    #   translated kwargs) or a refusal envelope `{ ok: false, ... }`.
+    def resolve(scope:, kwargs:, mapping:, required: [])
+      return { kwargs: kwargs.compact } if scope.nil?
+
+      unless scope.is_a?(::Semantica::Scope)
+        return refused(:scope_kwarg_conflict,
+                       "scope: must be a Semantica::Scope; got #{scope.class}")
+      end
+
+      conflicting = mapping.each_with_object([]) do |(_role, kwarg_name), acc|
+        acc << kwarg_name if kwargs[kwarg_name]
+      end
+      if conflicting.any?
+        return refused(:scope_kwarg_conflict,
+                       "scope: passed with overlapping per-kwarg value(s): #{conflicting.inspect}")
+      end
+
+      if scope.read_write_overlap?
+        return refused(:scope_read_write_overlap,
+                       "scope has graph(s) in both read and write roles: " \
+                         "#{(scope.read_graphs & scope.write_graphs).to_a.inspect}")
+      end
+
+      missing = required.reject { |role| scope.public_send(role) }
+      if missing.any?
+        return refused(:scope_role_missing,
+                       "scope missing required role(s) for this facade: #{missing.inspect}")
+      end
+
+      translated = kwargs.compact
+      mapping.each do |role, kwarg_name|
+        value = scope.public_send(role)
+        translated[kwarg_name] = value if value
+      end
+      { kwargs: translated }
+    end
+
+    def refused(reason, because)
+      { ok: false, reason: reason, because: because.to_s }
+    end
+  end
+
+  # Reachable as `Semantica::Scope::FacadeAdapter` for the
+  # documented contract addition (PLAN_0.13.0 Phase D's table).
+  Scope.const_set(:FacadeAdapter, FacadeAdapter)
 end

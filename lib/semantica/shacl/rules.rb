@@ -122,11 +122,33 @@ module Semantica
         end
       end
 
+      # PLAN_0.13.0 Phase D — Shacl::Rules.materialise! accepts
+      # either the per-kwarg trio or a `scope:`. Scope's `data:` →
+      # `data_graph:`, `shapes:` → `shapes_graph:`, `inferred:` →
+      # `inferred:`. Required scope roles: data + shapes + inferred.
+      SHACL_RULES_SCOPE_MAPPING = {
+        data: :data_graph, shapes: :shapes_graph, inferred: :inferred,
+      }.freeze
+      SHACL_RULES_REQUIRED_ROLES = %i[data shapes inferred].freeze
+
       module_function
 
-      def materialise!(data_graph:, shapes_graph:, inferred:,
+      def materialise!(data_graph: nil, shapes_graph: nil, inferred: nil,
+                       scope: nil,
                        rules: :all, provenance: true,
                        max_iterations: DEFAULT_MAX_ITERATIONS)
+        resolved = ::Semantica::Scope::FacadeAdapter.resolve(
+          scope: scope,
+          kwargs: { data_graph: data_graph, shapes_graph: shapes_graph,
+                    inferred: inferred },
+          mapping: SHACL_RULES_SCOPE_MAPPING,
+          required: SHACL_RULES_REQUIRED_ROLES,
+        )
+        return resolved unless resolved.is_a?(Hash) && resolved[:kwargs]
+        data_graph   = resolved[:kwargs][:data_graph]
+        shapes_graph = resolved[:kwargs][:shapes_graph]
+        inferred     = resolved[:kwargs][:inferred]
+
         graph_error = validate_graphs(data_graph, shapes_graph, inferred)
         return graph_error if graph_error
 
