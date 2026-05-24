@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.14.0 — 2026-05-24
+
+Lands PLAN_0.8.0 Phases B + C — the operator-facing RDF-star write
+surface. v0.13.0's `Semantica.rdf_star_writes_enabled?` predicate
+(which introspects `Sparql.respond_to?(:quoted_triple)`) now flips
+to `true` automatically; VV's `Vv::Memory.rdf_star_writes_enabled?`
+delegate inherits the flip without VV code changes.
+
+- **PLAN_0.8.0 Phase B** — `Semantica::Sparql.quoted_triple(s, p, o)`
+  module method returns a frozen `QuotedTriple` marker (Struct)
+  with recursive `to_ntriples_star` for nested triples
+  (`<< << s p o >> p o >>`). `Storable::TermSerializer.iri` /
+  `.object` recognise the marker + emit the `<< s p o >>`
+  N-Triples-star encoding; both also detect already-`<<…>>`-wrapped
+  strings (preserves serialised round-trips).
+- **PLAN_0.8.0 Phase B** — `Storable` DSL grows the `annotate`
+  block inside `triple` declarations:
+
+  ```ruby
+  triples do
+    subject -> { "urn:mm:product:#{sku}" }
+    triple "schema:gtin", -> { gtin } do
+      annotate "mm:reportedBy", -> { "<urn:mm:user:#{updater_id}>" }
+      annotate "mm:confidence", -> { confidence },
+               if: -> { confidence.present? }
+    end
+  end
+  ```
+
+  Predicate struct grows an `annotations:` field (frozen
+  `Array<Annotation>`); empty when no block provided. New
+  `AnnotationRecorder` captures `annotate` calls inside the
+  block.
+
+  Emission cycle per save:
+    1. Retract orphan annotations on the prior parent value's
+       quoted-triple subject via `DELETE { << s p ?o >> ?ap ?ao }
+       WHERE …` (safe-idempotent for predicates without
+       annotations or empty stores).
+    2. Replace the parent triple via existing read-replace.
+    3. Emit annotations on the new quoted-triple subject.
+
+  Destroy retracts the parent triple AND every annotation on its
+  quoted-triple subject via the same DELETE WHERE pattern. Parent
+  `if:` false → both parent and annotations skip. Annotation
+  `if:` false → only that annotation skips. Update-time changes
+  to the parent object orphan the prior quoted-triple subject —
+  SPARQL-star referential opacity semantics (StarExts.md §3).
+
+- **PLAN_0.8.0 Phase C** — `Sparql.bulk_insert` / `bulk_delete`
+  accept three RDF-star row shapes in `:s` / `:o` positions:
+    1. `Sparql::QuotedTriple` marker (from Phase B).
+    2. 3-element nested Array shorthand `[s, p, o]` — coerced
+       to `Sparql.quoted_triple(*term)`.
+    3. Pre-serialised `<< s p o >>` strings via `raw: true`
+       (engine-native form).
+
+  Predicate position stays IRI-only per the W3C SPARQL-star
+  grammar — quoted-predicate refuses `:invalid_dsl` with
+  `"predicate position must be an IRI"`. Malformed nested Arrays
+  in `:s` / `:o` refuse `:invalid_dsl` with
+  `"subject/object array form expects 3 elements"`. `graph:`
+  kwarg composes (PLAN_0.5.0); `bulk_delete` symmetric.
+
+  `unwrap_iri` now leaves `<<…>>` tokens untouched — engine ≥
+  0.7.0's `rdf_insert_many` accepts them in subject/object
+  positions verbatim; the outer-bracket strip would corrupt the
+  N-Triples-star encoding.
+
+- **Capability flip** — `Semantica.rdf_star_writes_enabled?`
+  returns `true`. The predicate is introspection-driven (no
+  version constants), so the flip is automatic.
+
+Specs: 314 → 330 (+16 across Phases B + C). PLAN_0.8.0 is now
+substantively complete (Phase A spec-only; B + C land the
+operator surfaces). Phases D (degraded shape) / E (contract
+additions) / F (specs) / G (docs) are housekeeping that piggybacks
+on this release.
+
 ## 0.13.0 — 2026-05-24
 
 Six PLANs land between 0.7.0 and 0.13.0 — every milestone in the
