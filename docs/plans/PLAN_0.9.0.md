@@ -36,7 +36,7 @@ the plan can land in parallel so the substrate-side consumer
 | MM-side reasoner research note | MM repo | **TBD** — companion to `magentic-market-ai/docs/research/StarExts.md`. v0.9.0's gotchas / scope decisions should land in an MM-side primer the way v0.8.0's did. Open question for MM: where does the reasoner subagent live, and what does it call into? |
 | `CONSUMER_REQUIREMENT_MM.md` | this repo | Drift target. v0.9.0 adds `Semantica::Reasoner` surface block once MM signals adoption. |
 
-## Engine prerequisites (sqlite-sparql ≥ 0.7.0) — **already satisfied**
+## Engine prerequisites (sqlite-sparql ≥ 0.8.0) — **already satisfied**
 
 **No new engine surface.** Every OWL 2 RL rule is a SPARQL UPDATE
 form (`INSERT { … } WHERE { … }`) that already routes through
@@ -369,7 +369,7 @@ asserted triples that triggered it.
   Phase C.
 - Extend `spec/semantica/sparql_star_spec.rb` (or sibling)
   with the provenance shape from Phase E.
-- `bin/check` green against engine ≥ 0.7.0 (no new engine
+- `bin/check` green against engine ≥ 0.8.0 (no new engine
   pin — OWL 2 RL rides on the existing surfaces).
 
 ### Phase G — Docs
@@ -448,7 +448,7 @@ asserted triples that triggered it.
 ## Acceptance signal
 
 1. Phases A/B/C/D/E land with passing specs.
-2. `bin/check` green against engine ≥ 0.7.0.
+2. `bin/check` green against engine ≥ 0.8.0.
 3. CHANGELOG `0.9.0` heading drops `(unreleased)`.
 4. `VERSION` → `0.9.0`.
 5. README documents the `ontology do … end` block + the
@@ -492,5 +492,5 @@ asserted triples that triggered it.
   v0.9.0's rule library transcribes.
 - W3C OWL 2 RL/RDF rules table <https://www.w3.org/TR/owl2-profiles/#Reasoning_in_OWL_2_RL_and_RDF_Graphs_using_Rules>
   — the exact rule set `Rules::OwlRl` implements.
-- `sqlite-sparql/CHANGELOG.md` § `0.7.0` — engine pin v0.9.0
+- `sqlite-sparql/CHANGELOG.md` § `0.8.0` — engine pin v0.9.0
   inherits from v0.8.0.

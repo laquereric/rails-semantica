@@ -39,25 +39,59 @@ either.
 | MM-side derivation research note | MM repo | **TBD.** Open question for MM: which derivations are "ontological" (OWL 2 RL) and which are "business-logic" (SHACL Rules)? A companion note in `magentic-market-ai/docs/research/` should walk the dividing line. |
 | `CONSUMER_REQUIREMENT_MM.md` | this repo | Drift target. v0.12.0 adds the SHACL Rules surface block once MM signals adoption. |
 
-## Engine prerequisites (sqlite-sparql ≥ 0.7.0) — **already satisfied**
+## Engine prerequisites (sqlite-sparql ≥ 0.8.0) — **already satisfied**
 
-**No new engine surface.** `sh:TripleRule` expands to an `INSERT
-{ ?focus <p> ?o } WHERE { … }` form already routed through
-`sparql_update` (PLAN_0.3.0). `sh:SPARQLRule` embeds a CONSTRUCT
-query that v0.12.0 rewrites to an INSERT WHERE — also routed
-through `sparql_update`. RDF-star provenance annotations ride
-PLAN_0.8.0's surface. No new scalars, no new rule-engine
-primitives.
+`sh:TripleRule` expands to an `INSERT { ?focus <p> ?o } WHERE
+{ … }` form already routed through `sparql_update` (PLAN_0.3.0).
+`sh:SPARQLRule` embeds a CONSTRUCT query that v0.12.0 rewrites to
+an INSERT WHERE — also routed through `sparql_update` for the
+per-rule shape, or through `rdf_construct_many` (engine v0.8.0)
+for the batched shape (see below). RDF-star provenance annotations
+ride PLAN_0.8.0's surface.
 
-If SHACL Rule evaluation later proves the wrong shape — say, a
-single shape has 200 rules and the gem's per-rule `Sparql.execute`
-round-trips dominate — an engine-side rule batcher would help:
+### Per-rule vs. batched execution
 
-1. **Batched rule execution.** Engine accepts a list of CONSTRUCT
-   queries + emits the union as one INSERT. Saves the
-   per-query parse cost. Substantial engine work; deferred.
+Two implementation shapes are live as of engine v0.8.0; pick at
+Phase B time:
 
-v0.12.0 ships the per-rule shape; v0.13.0+ revisits.
+1. **Per-rule (default — ships in v0.12.0 Phase B).**
+   `materialise!` iterates rules and issues one `Sparql.execute`
+   per rule per fixpoint iteration. N rules × M iterations =
+   N×M FFI crossings + N×M SQL parses + N×M SPARQL parses.
+   Simplest to reason about; honest about cost; the natural
+   shape for low-rule-count shapes (~10 rules per shape).
+
+2. **Batched (opt-in, engine v0.8.0).** `materialise!` collects
+   all CONSTRUCT-shaped rules' queries into one
+   `rdf_construct_many(queries_json)` call per iteration, parses
+   the JSON-array result, attaches `:derivedBy <rule_iri>`
+   annotations gem-side using the position-in-array convention
+   (the `i`-th blob is the `i`-th rule's output), then
+   bulk-inserts via `Sparql.bulk_insert` (engine
+   `rdf_insert_many`). N rules × M iterations collapses to
+   roughly **2 × M** FFI crossings (one construct_many + one
+   bulk_insert per iteration), regardless of N. The per-rule
+   SPARQL parse cost still happens N× (Oxigraph parses each
+   query at evaluation time); savings are SQL/FFI overhead, not
+   the SPARQL parser. Worthwhile when N ≥ ~20 rules per shape.
+
+The two paths produce identical asserted graphs + identical
+RDF-star annotations — the equivalence is pinned by a spec that
+runs the same shape through both paths and `sameTerm`-compares
+the inferred graphs.
+
+The `sh:TripleRule` form does **not** fit `rdf_construct_many`
+(it's an INSERT, not a CONSTRUCT). `sh:TripleRule` rules stay on
+the per-rule `Sparql.execute` path even when the batched mode is
+enabled; `sh:SPARQLRule` rules opt in. Mixing the two shapes
+within a shape is fine — they iterate independently within each
+fixpoint pass.
+
+Phase B ships the per-rule path; Phase D (or a later phase, gated
+on telemetry from MM) adds the batched opt-in. The engine surface
+is ready today; gem-side adoption waits for a concrete
+bottleneck signal per RS's posture on the engine's "Requested
+extensions" section.
 
 ## Why SHACL Rules (and not "just use OWL 2 RL")
 
@@ -406,7 +440,7 @@ end
 - W3C SHACL-AF test suite's rules slice — every test case
   exercising `sh:TripleRule` or `sh:SPARQLRule` (excluding
   the JS / NodeExpression cases) passes.
-- `bin/check` green against engine ≥ 0.7.0 (no new pin — SHACL
+- `bin/check` green against engine ≥ 0.8.0 (no new pin — SHACL
   Rules rides the existing surfaces).
 
 ### Phase G — Docs
@@ -489,7 +523,7 @@ end
    green.
 3. Cross-surface composition spec (OWL 2 RL → SHACL Rules)
    green.
-4. `bin/check` green against engine ≥ 0.7.0.
+4. `bin/check` green against engine ≥ 0.8.0.
 5. CHANGELOG `0.12.0` heading drops `(unreleased)`.
 6. `VERSION` → `0.12.0`.
 7. README documents the `triple_rule` + `sparql_rule` DSL,
@@ -547,5 +581,7 @@ end
   — the integration safety net for Phase B + Phase F.
 - DRed (Gupta, Mumick, Subrahmanian 1993) — incremental
   Datalog over the unified dependency graph.
-- `sqlite-sparql/CHANGELOG.md` § `0.7.0` — engine pin v0.12.0
-  inherits from v0.8.0 / v0.9.0 / v0.10.0 / v0.11.0.
+- `sqlite-sparql/CHANGELOG.md` § `0.8.0` — engine pin v0.12.0
+  inherits from v0.8.0 / v0.9.0 / v0.10.0 / v0.11.0. The 0.8.0
+  release lands `rdf_construct_many` — the batched-execution
+  surface v0.12.0's opt-in shape rides on.

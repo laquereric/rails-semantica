@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+- **Engine floor bumped to `sqlite-sparql ≥ 0.8.0`.** No live gem
+  code changes — the Phase-B materialise loops in
+  `Semantica::Reasoner` / `Semantica::Shacl` /
+  `Semantica::Shacl::Rules` stay on the per-rule `Sparql.execute`
+  path (the `lib/semantica/shacl/rules.rb` non-goal comment
+  already names `rdf_construct_many` as deferred-until-telemetry).
+  Plans PLAN_0.9.0 / PLAN_0.10.0 / PLAN_0.11.0 / PLAN_0.12.0 /
+  PLAN_0.13.0 all bump their `engine ≥ …` floor docstring and
+  the engine-CHANGELOG-section reference to 0.8.0.
+- **PLAN_0.12.0 (SHACL Rules) — batched-execution shape no
+  longer deferred.** Engine v0.8.0 ships `rdf_construct_many`,
+  the surface PLAN_0.12.0's "deferred batched rule execution"
+  note pencilled in as a future engine ask. The plan's "Engine
+  prerequisites" section now documents two implementation
+  shapes — the per-rule path (`sparql_update` per rule per
+  iteration, default for Phase B) and the batched path
+  (`rdf_construct_many` once per iteration, opt-in, worthwhile
+  at ~20+ rules per shape). Adoption stays gated on a concrete
+  bottleneck signal from MM. Both shapes produce identical
+  asserted graphs + RDF-star annotations; the equivalence is
+  pinned by a planned cross-shape spec.
+
 ## 0.7.0 — 2026-05-20
 
 Closes PLAN_0.7.0. Adds `Semantica::EtherealGraph`, a

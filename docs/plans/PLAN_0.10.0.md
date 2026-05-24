@@ -40,7 +40,7 @@ doesn't overlap.
 | MM-side SHACL research note | MM repo | **TBD** — companion to `magentic-market-ai/docs/research/StarExts.md`. v0.10.0's gotchas / scope decisions land in an MM-side primer when MM signals adoption. |
 | `CONSUMER_REQUIREMENT_MM.md` | this repo | Drift target. v0.10.0 adds `Semantica::Shacl` surface block once MM signals adoption. |
 
-## Engine prerequisites (sqlite-sparql ≥ 0.7.0) — **already satisfied**
+## Engine prerequisites (sqlite-sparql ≥ 0.8.0) — **already satisfied**
 
 **No new engine surface.** Every SHACL Core constraint component
 can be evaluated by a templated SPARQL ASK or SELECT query
@@ -429,7 +429,7 @@ _:v1 a sh:ValidationResult ;
   fixture).
 - New file `spec/semantica/shacl_shape_concern_spec.rb`
   covering Phase C + D.
-- `bin/check` green against engine ≥ 0.7.0 (no new pin —
+- `bin/check` green against engine ≥ 0.8.0 (no new pin —
   SHACL Core rides the existing read-side surfaces).
 
 ### Phase G — Docs
@@ -506,7 +506,7 @@ _:v1 a sh:ValidationResult ;
 ## Acceptance signal
 
 1. Phases A/B/C/D/E land with passing specs.
-2. `bin/check` green against engine ≥ 0.7.0.
+2. `bin/check` green against engine ≥ 0.8.0.
 3. CHANGELOG `0.10.0` heading drops `(unreleased)`.
 4. `VERSION` → `0.10.0`.
 5. README documents the `shape do … end` block + the
@@ -557,5 +557,5 @@ _:v1 a sh:ValidationResult ;
   — the spec v0.10.0's constraint library transcribes.
 - W3C SHACL test suite <https://w3c.github.io/data-shapes/data-shapes-test-suite/>
   — the integration safety net for Phase B.
-- `sqlite-sparql/CHANGELOG.md` § `0.7.0` — engine pin v0.10.0
+- `sqlite-sparql/CHANGELOG.md` § `0.8.0` — engine pin v0.10.0
   inherits from v0.8.0 / v0.9.0.
