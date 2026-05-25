@@ -372,6 +372,86 @@ pairs) + one bulk insert (all new values). Idempotency contract from
 the current Storable docs stays unchanged; only the dispatch shape
 changes.
 
+### 7. RDF-star writes (statement metadata) — **SHIPPED (PLAN_0.8.0 Phases A/B/C, v0.14.0)**
+
+Operator-facing surface for emitting *statements about statements*
+— provenance, confidence, source-attribution metadata that
+formerly required hand-written reification triples. Engine prereqs
+all landed in `sqlite-sparql 0.7.0`; gem-side promotion shipped at
+v0.14.0; surface preserved through the v0.15.0 rename.
+
+```ruby
+# Sparql facade — operator-facing marker for any subject/object slot
+Vv::Graph::Sparql.quoted_triple(s, p, o)
+# => Vv::Graph::Sparql::QuotedTriple (frozen Struct; nests via
+#    recursive `to_ntriples_star`).
+
+# Storable DSL — annotate block inside a `triple` declaration
+class Product < ApplicationRecord
+  include Vv::Graph::Storable
+
+  triples do
+    subject -> { "urn:mm:product:#{sku}" }
+    triple "schema:gtin", -> { gtin } do
+      annotate "mm:reportedBy", -> { "<urn:mm:user:#{updater_id}>" }
+      annotate "mm:reportedAt", -> { updated_at.iso8601 }
+      annotate "mm:confidence", -> { confidence_score },
+               if: -> { confidence_score.present? }
+    end
+  end
+end
+
+# bulk_insert / bulk_delete — quoted-triple rows in :s / :o
+Vv::Graph::Sparql.bulk_insert([
+  { s: Vv::Graph::Sparql.quoted_triple("urn:mm:p:1", "schema:gtin", "1234567890123"),
+    p: "mm:reportedBy",
+    o: "<urn:mm:user:42>" },
+
+  # Or 3-element Array shorthand (coerced to quoted_triple):
+  { s: ["urn:mm:p:1", "schema:gtin", "1234567890123"],
+    p: "mm:confidence", o: 0.92 },
+])
+```
+
+Semantics MM depends on:
+
+- **`annotate` emission cycle per save**: (1) retract orphan
+  annotations on the prior parent value's quoted-triple subject,
+  (2) replace the parent triple, (3) emit annotations on the new
+  quoted-triple subject. `after_destroy` retracts both parent and
+  every annotation.
+- **`if:` gating composes both levels.** Parent `if:` false →
+  parent + all annotations skip; annotation `if:` false → only
+  that annotation skips.
+- **Predicate position stays IRI-only** per the W3C SPARQL-star
+  grammar. `quoted_triple` in `:p` refuses with `:invalid_dsl`.
+- **`graph:` kwarg composes** through all three surfaces;
+  annotations land in the parent triple's named graph.
+- **Capability predicate**: `Vv::Graph.rdf_star_writes_enabled?`
+  returns `true` against v0.14.0+ by introspection over
+  `Sparql.respond_to?(:quoted_triple)`. MM should branch on the
+  predicate rather than parse `VERSION`.
+
+MM's expected consumption shape for `Product` projections:
+provenance triples (`mm:reportedBy`, `mm:reportedAt`, `mm:source`,
+`mm:confidence`) attached to volatile per-product predicates
+(`schema:gtin`, `schema:offers`, `mm:hasFeature`) so a downstream
+SPARQL-star query can ask "who claimed this GTIN and when?"
+without a separate reification table.
+
+Gotchas pinned by README (operators hit these):
+
+- **Quoted ≠ asserted.** A bare `quoted_triple(...)` in subject
+  position does not assert the inner triple. `annotate` does both
+  (annotation-shorthand semantics).
+- **Quoted-triple subject identity.** Re-emitting a parent triple
+  with a changed object orphans the prior annotations — the old
+  quoted-triple subject becomes unreachable. SPARQL-star
+  referential opacity, not a gem bug.
+- **No quoting of quads.** Quoted triples carry no graph label.
+  Cross-graph provenance needs an explicit `mm:assertedIn`
+  predicate.
+
 ### Acceptance signal
 
 When all six extensions land (single v0.2.0 or incrementally across

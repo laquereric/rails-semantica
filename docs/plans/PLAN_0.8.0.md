@@ -15,22 +15,45 @@
 
 ## Current state
 
-**Draft (gem-side not yet started; engine prereqs now satisfied).**
+**Substantively shipped across v0.13.0–v0.15.0 (Phase D deferred).**
+
+- **Phase A (read-path pass-through specs)** — ✅ shipped.
+  `spec/vv/graph/sparql_star_spec.rb` (146 lines) pins
+  `INSERT DATA { << … >> … }`, `SELECT … WHERE { << … >> … }`,
+  `FILTER(isTriple(?x))`, and `graph:` composition. No gem-side
+  production code; the existing facade passes SPARQL-star through
+  to Oxigraph verbatim.
+- **Phase B (`Sparql.quoted_triple` + `Storable::DSL annotate`)** —
+  ✅ shipped in v0.14.0. `lib/vv/graph/sparql.rb:98` exposes the
+  marker; `lib/vv/graph/storable.rb:680` adds the `annotate` block.
+  TermSerializer recognises the marker and emits `<< … >>`. Save
+  emits/replaces; destroy retracts parent + annotations.
+  Dispatch-mode equivalence pinned by spec.
+- **Phase C (`bulk_insert` / `bulk_delete` quoted-triple rows)** —
+  ✅ shipped in v0.14.0. Accepts `QuotedTriple` marker, 3-element
+  Array shorthand, or pre-serialised `<< … >>` strings via
+  `raw: true`. Predicate position refuses with `:invalid_dsl`.
+- **Phase D (degraded shape / `:rdf_star_unsupported` refusal)** —
+  **deferred.** Engine 0.7.0 ships all six prereqs, so the
+  critical path doesn't need the fallback. Re-open if a future
+  Oxigraph or `sqlite-sparql` bump regresses one of the prereqs.
+- **Phase E (contract additions)** — ✅ pinned. Every surface in
+  the Phase E table below is reachable + spec'd.
+- **Phase F (specs + bin/check)** — ✅ shipped. 336 examples
+  pass, including the three star-specific files.
+- **Phase G (docs)** — ✅ shipped in `CHANGELOG.md` 0.14.0 +
+  0.15.0 entries; `README.md` "RDF-star (statement metadata)"
+  section; `CONSUMER_REQUIREMENT_MM.md` §7 surface block;
+  `Vv::Graph.rdf_star_writes_enabled?` returns `true` against
+  the current release (verified via live probe). The rename to
+  `vv-graph` / `Vv::Graph::*` at v0.15.0 preserves every Phase B/C
+  surface verbatim — only namespace names move.
+
 `sqlite-sparql` 0.7.0 landed the full RDF-star round-trip
 (quoted-triple terms across every read and write path, plus three
-new extractor scalars). Both `sqlite-sparql`'s `CONSUMER_REQUIREMENT_RS.md`
-and `CONSUMER_REQUIREMENT_MM.md` list the new surface as
-"Available upstream but not exercised" — v0.8.0 is the rails-semantica
-side promoting it from available-to-consumed. MM's Conformer plan
-(`magentic-market-ai/docs/research/StarExts.md` §6) can pin
-`sqlite-sparql` at v0.7.0 today; this gem then pins engine ≥ 0.7.0
-at v0.8.0 release.
-
-Because the engine prereqs are met, **Phase D (degraded read-only
-shape) drops out of the critical path** — kept below as the
-documented fallback if a future engine regression breaks one of
-the surfaces v0.8.0 depends on, but not the release-gating path
-it was when this plan was first drafted.
+new extractor scalars); engine pin at `>= 0.7.0` is implicit
+through the `vv-graph` gemspec's engine pin (currently 0.8.0).
+MM's Conformer plan can consume the surface today.
 
 ## Anchors
 

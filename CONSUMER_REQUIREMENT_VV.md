@@ -181,12 +181,12 @@ All three predicates VV asked for shipped in PLAN_0.13.0 Phase A
 through the v0.15.0 rename:
 
 - **`Vv::Graph.rdf_star_writes_enabled? → Boolean`** — currently
-  `false` (introspection probe on `Sparql.respond_to?(:quoted_triple)`).
-  Flips to `true` automatically when PLAN_0.8.0 Phase B lands the
-  `Sparql.quoted_triple` + `Storable::DSL annotate` surface (still
-  pending, see B2). VV's `Vv::Memory.rdf_star_writes_enabled?`
-  delegates to this when defined, with a `defined?(::Vv::Graph::EtherealGraph)`
-  fallback for safety.
+  `true` against `vv-graph` v0.15.0 (introspection probe on
+  `Sparql.respond_to?(:quoted_triple)`, which became defined when
+  PLAN_0.8.0 Phase B shipped in v0.14.0 — see B2 below). VV's
+  `Vv::Memory.rdf_star_writes_enabled?` delegates to this when
+  defined, with a `defined?(::Vv::Graph::EtherealGraph)` fallback
+  for safety.
 - **`Vv::Graph.checkpoint_can_round_trip?(content_kind:)`** —
   accepts `:plain_ntriples` / `:ntriples_star` (per
   `Vv::Graph::CHECKPOINT_CONTENT_KINDS`); both return `true` as of
@@ -250,23 +250,53 @@ original dependency chain.
 
 ### B2 — `annotate` DSL and `Sparql.quoted_triple` marker (PLAN_0.8.0 Phase B)
 
-**Severity: ergonomics. Status: scoped upstream (PLAN_0.8.0 Phase B), implementation pending.**
+**Severity: ergonomics. Status: ✅ shipped (PLAN_0.8.0 Phases B + C, v0.14.0).**
 
-VV's Conformer Writer under P1 interpolates raw SPARQL-star UPDATE
-strings into a heredoc and dispatches via `Sparql.execute`. This
-works and is currently the canonical shape inside `vv-graph`
-itself (PLAN_0.9.0 / 0.10.0 / 0.12.0 Phase B implementations all
-emit RDF-star provenance the same way). Landing PLAN_0.8.0 Phase B
-turns the Writer's one method into a DSL block and lifts
-`after_destroy` annotation retraction into the framework. Welcome,
-not blocking. When it lands, VV's gemspec moves to `>= 0.8.0`
-lockstep with the Writer migration, gated behind
-`Vv::Memory.rdf_star_writes_enabled?`.
+**Original framing.** VV's Conformer Writer interpolated raw
+SPARQL-star UPDATE strings into a heredoc and dispatched via
+`Sparql.execute`. The PLAN_0.8.0 Phase B ask was to turn that
+single method into a DSL block and lift `after_destroy`
+annotation retraction into the framework.
 
-The validation by sibling-gem example (PLAN_0.9.0 / 0.10.0 / 0.12.0
-Phase B all shipping raw `Sparql.execute` without waiting on this
-DSL) lowers the urgency: this is a Writer-internal ergonomics
-improvement when it arrives, not a semantic correction.
+**Resolution.** Three shipped surfaces (preserved verbatim
+through the v0.15.0 rename):
+
+- **`Vv::Graph::Sparql.quoted_triple(s, p, o)`**
+  (`lib/vv/graph/sparql.rb:98`) — module method returning a frozen
+  `Vv::Graph::Sparql::QuotedTriple` Struct marker. Recursive
+  `to_ntriples_star` handles nested quoted triples
+  (`<< << s p o >> p o >>`).
+- **`Vv::Graph::Storable::DSL annotate`** (`lib/vv/graph/storable.rb:680`)
+  — block keyword inside `triple` declarations:
+
+  ```ruby
+  triples do
+    subject -> { "urn:mm:product:#{sku}" }
+    triple "schema:gtin", -> { gtin } do
+      annotate "mm:reportedBy", -> { "<urn:mm:user:#{updater_id}>" }
+      annotate "mm:confidence", -> { confidence },
+               if: -> { confidence.present? }
+    end
+  end
+  ```
+
+  Emission cycle per save: (1) retract orphan annotations on the
+  prior parent value's quoted-triple subject, (2) replace the
+  parent triple, (3) emit annotations on the new quoted-triple
+  subject. Destroy retracts both parent and every annotation.
+  Parent `if:` false → both skip; annotation `if:` false → only
+  that annotation skips.
+- **`Sparql.bulk_insert` / `bulk_delete` quoted-triple rows**
+  (Phase C, also v0.14.0) — accept `QuotedTriple` marker,
+  3-element nested Array shorthand, or pre-serialised
+  `<< s p o >>` strings via `raw: true`. Predicate position
+  refuses with `:invalid_dsl` (W3C SPARQL-star grammar).
+
+**VV-side follow-up.** VV's Conformer Writer can now migrate from
+raw heredocs to the `annotate` DSL block when the v0.16.x
+Writer refactor lands; the upstream surface is no longer the
+blocker. VV's gemspec pin moves to `>= 0.14.0` (or follows the
+rename to `>= 0.15.0`) lockstep with that migration.
 
 ### B3 — `Vv::Graph::Scope` value object (PLAN_0.13.0)
 
