@@ -1,5 +1,142 @@
 # Changelog
 
+## 0.15.0 — 2026-05-25
+
+**Rename: `rails-semantica` → `vv-graph`.** Four pinned breaking
+changes; no capability surface added or removed. The
+implementation is mechanically equivalent to v0.14.0; only the
+names move. Operators upgrading from v0.14.0 follow the
+migration recipe below.
+
+The rename aligns the gem with the substrate's `Vv::*`
+namespace convention (`vv-memory`, `vv-action-cable`,
+`vv-browser-manager`, etc. — see `agent-os/rules/ruby.md`).
+The prior name shipped v0.1.0 through v0.14.0; the
+v0.14.0 release line is the last under `rails-semantica`.
+
+### Breaking changes (pinned)
+
+- **Gem name:** `rails-semantica` → `vv-graph`. Update
+  `Gemfile`: `gem "rails-semantica", path: …` →
+  `gem "vv-graph", path: …`.
+- **Top-level constant:** `Semantica::*` → `Vv::Graph::*`
+  across every public surface (`Vv::Graph::Sparql`,
+  `Vv::Graph::Storable`, `Vv::Graph::Reasoner`,
+  `Vv::Graph::Shacl`, `Vv::Graph::Shacl::Rules`,
+  `Vv::Graph::Scope`, `Vv::Graph::ChangeSet`,
+  `Vv::Graph::EtherealGraph`, `Vv::Graph::Loader`,
+  `Vv::Graph::VERSION`, `Vv::Graph::CHECKPOINT_CONTENT_KINDS`,
+  `Vv::Graph.rdf_star_writes_enabled?`,
+  `Vv::Graph.facade_version`,
+  `Vv::Graph.checkpoint_can_round_trip?`).
+- **Require path:** `require "rails-semantica"` →
+  `require "vv-graph"`. The internal `lib/semantica/*.rb` tree
+  moved to `lib/vv/graph/*.rb`.
+- **Active Storage attachment:** `:semantica_graph_blob` →
+  `:vv_graph_blob`. `EtherealGraph` consumers with existing
+  attachments must rename via a one-off migration:
+  ```ruby
+  ActiveStorage::Attachment
+    .where(record_type: "YourModel", name: "semantica_graph_blob")
+    .update_all(name: "vv_graph_blob")
+  ```
+  Documented in the rename migration recipe in README.
+- **IRI namespace:** `urn:semantica:*` → `urn:vv-graph:*` for
+  every gem-emitted IRI:
+  - `urn:semantica:derivedBy` → `urn:vv-graph:derivedBy`
+  - `urn:semantica:derivedAt` → `urn:vv-graph:derivedAt` (reserved)
+  - `urn:semantica:derivedFrom` → `urn:vv-graph:derivedFrom` (reserved)
+  - `urn:semantica:reasoner:rule:<id>` → `urn:vv-graph:reasoner:rule:<id>`
+  - `urn:semantica:validation-report:<uuid>` → `urn:vv-graph:validation-report:<uuid>`
+  - `urn:semantica:validation-result:<uuid>` → `urn:vv-graph:validation-result:<uuid>`
+  - `urn:semantica:changeset:<ulid>` → `urn:vv-graph:changeset:<ulid>`
+  - `urn:semantica:rules:transient-report:<uuid>` → `urn:vv-graph:rules:transient-report:<uuid>`
+  - `urn:semantica:rules:transient-shapes:<uuid>` → `urn:vv-graph:rules:transient-shapes:<uuid>`
+
+  Existing graphs in any operator's store carry the old IRIs.
+  The rename release does NOT auto-migrate stored data;
+  operators choosing to align IRIs run a SPARQL UPDATE
+  rewriting their existing triples. The example migration is
+  in the README's "Migration from rails-semantica 0.14.0"
+  section.
+- **Environment variable:** `MM_SQLITE_SPARQL_PATH` →
+  `VV_GRAPH_SQLITE_SPARQL_PATH`. Update `bin/check`,
+  `config/database.yml`, any CI / dev / production
+  environment setup that pins the engine artifact path.
+
+### What did NOT change
+
+- **Engine pin** — sqlite-sparql ≥ 0.8.0, identical to v0.14.0.
+- **Surface capability** — every method, kwarg, refusal
+  envelope shape, `:reason` symbol, value object, and
+  contract addition pinned at v0.7.0–v0.14.0 stays — only
+  the namespace prefix changes.
+- **Spec count + behaviour** — 336 examples (same as v0.14.0);
+  every test continues to pass against the renamed code.
+- **Documentation plans** — `docs/plans/PLAN_0.X.0.md` files
+  documenting historical releases continue to use the
+  `Semantica::*` names that shipped at those versions
+  (faithful release history). Forward-facing plans
+  (PLAN_0.14.0, PLAN_0.14.1) use the new `Vv::Graph::*`
+  names.
+
+### Migration recipe (from v0.14.0)
+
+```ruby
+# 1. Gemfile
+- gem "rails-semantica", path: "vendor/rails-semantica"
++ gem "vv-graph",        path: "vendor/vv-graph"
+
+# 2. Top-level requires (uncommon — usually auto-loaded by Railtie)
+- require "rails-semantica"
++ require "vv-graph"
+
+# 3. Code mentions (project-wide find/replace)
+- Semantica::Sparql.select(...)
++ Vv::Graph::Sparql.select(...)
+- include Semantica::Storable
++ include Vv::Graph::Storable
+- include Semantica::EtherealGraph
++ include Vv::Graph::EtherealGraph
+- Semantica.rdf_star_writes_enabled?
++ Vv::Graph.rdf_star_writes_enabled?
+# … etc for every Semantica::* reference
+
+# 4. Active Storage data migration (one-off, run once after upgrade)
+ActiveStorage::Attachment
+  .where(name: "semantica_graph_blob")
+  .update_all(name: "vv_graph_blob")
+
+# 5. IRI migration (optional — only if operators want fresh stored URIs)
+Vv::Graph::Sparql.execute(<<~SPARQL)
+  DELETE { ?s ?old_p ?o }
+  INSERT { ?s ?new_p ?o }
+  WHERE  {
+    ?s ?old_p ?o .
+    FILTER(STRSTARTS(STR(?old_p), "urn:semantica:"))
+    BIND(IRI(REPLACE(STR(?old_p), "^urn:semantica:", "urn:vv-graph:")) AS ?new_p)
+  }
+SPARQL
+# Repeat for subject + object positions; or skip and accept the
+# semantic continuity ("urn:semantica:derivedBy" still means the
+# same thing in your stored graphs — operators querying for it
+# just use the old IRI).
+
+# 6. Environment variable
+- export MM_SQLITE_SPARQL_PATH=/path/to/libsqlite_sparql.dylib
++ export VV_GRAPH_SQLITE_SPARQL_PATH=/path/to/libsqlite_sparql.dylib
+
+# 7. config/database.yml
+- ${MM_SQLITE_SPARQL_PATH}
++ ${VV_GRAPH_SQLITE_SPARQL_PATH}
+```
+
+The substrate's `vendor/rails-semantica/` directory
+itself can be renamed at the operator's discretion (e.g.,
+`git mv vendor/rails-semantica vendor/vv-graph` at the
+parent repo level). The gem doesn't care about its on-disk
+directory name; only the gem name + namespace matter.
+
 ## 0.14.0 — 2026-05-24
 
 Lands PLAN_0.8.0 Phases B + C — the operator-facing RDF-star write

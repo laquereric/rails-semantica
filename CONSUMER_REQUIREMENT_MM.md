@@ -1,7 +1,7 @@
 # Consumer requirements — MagenticMarket substrate
 
 This file records the surface [MagenticMarket](https://github.com/laquereric/magentic-market-ai)
-(the substrate; "MM" hereafter) consumes from `rails-semantica`. It exists so
+(the substrate; "MM" hereafter) consumes from `vv-graph`. It exists so
 upstream changes can be checked against a written consumer expectation —
 **drift** between this file and the gem's actual behaviour signals work that
 needs to land in both repos lockstep.
@@ -12,8 +12,8 @@ than any single consumer.
 
 - MM repo: <https://github.com/laquereric/magentic-market-ai>
 - MM plan that introduced the dependency: `docs/plans/PLAN_0_29_1.md`
-- MM architecture doc the dependency rides on: `docs/architecture/Semantica.md`
-  (promoted from `docs/research/Semantica.md` during PLAN_0_29_1 Phase E)
+- MM architecture doc the dependency rides on: `docs/architecture/Vv::Graph.md`
+  (promoted from `docs/research/Vv::Graph.md` during PLAN_0_29_1 Phase E)
 
 ## How MM pins this gem
 
@@ -31,38 +31,38 @@ pin, the PR description references the upstream PR that motivated the bump.
 
 ## Surfaces MM consumes
 
-### `Semantica::Loader`
+### `Vv::Graph::Loader`
 
-- `Semantica::Loader.ensure_extension_loaded!` — idempotent. MM's Railtie
+- `Vv::Graph::Loader.ensure_extension_loaded!` — idempotent. MM's Railtie
   calls this in `config.after_initialize`; MM expects the call to be safe
   to repeat on every new AR connection.
-- Failure mode: raises `Semantica::Loader::ExtensionMissing` with a
+- Failure mode: raises `Vv::Graph::Loader::ExtensionMissing` with a
   structured because-clause naming the expected path + the `cargo build`
   command.
-- Env var the Loader reads: `MM_SQLITE_SPARQL_PATH` (absolute path to
+- Env var the Loader reads: `VV_GRAPH_SQLITE_SPARQL_PATH` (absolute path to
   `libsqlite_sparql.{dylib,so}`). If renamed upstream, MM's
   `config/database.yml` + `QuickStart_Developer.md` must update lockstep.
 
-### `Semantica::Sparql`
+### `Vv::Graph::Sparql`
 
 Four class methods. **All four return structured envelopes; none raise.**
 This is load-bearing for MM's Architect's-No #18 discipline (every refusal
 carries a verbatim because-clause).
 
 ```ruby
-Semantica::Sparql.select(query_string)
+Vv::Graph::Sparql.select(query_string)
 # => { ok: true,  results: [{ "var" => "value", ... }, ...] }
 # => { ok: false, reason: <symbol>, because: <string> }
 
-Semantica::Sparql.ask(query_string)
+Vv::Graph::Sparql.ask(query_string)
 # => { ok: true,  value: true|false }
 # => { ok: false, reason: <symbol>, because: <string> }
 
-Semantica::Sparql.construct(query_string)
+Vv::Graph::Sparql.construct(query_string)
 # => { ok: true,  ntriples: "<s> <p> <o> .\n..." }
 # => { ok: false, reason: <symbol>, because: <string> }
 
-Semantica::Sparql.execute(update_query_string)
+Vv::Graph::Sparql.execute(update_query_string)
 # => { ok: true,  count: <integer> }
 # => { ok: false, reason: <symbol>, because: <string> }
 # v0.1.0 supports INSERT DATA / DELETE DATA / CLEAR ALL forms.
@@ -88,11 +88,11 @@ Envelope-shape stability MM depends on:
   string) are present.
 - Additive fields are safe; renames or removals are breaking from MM's POV.
 
-### `Semantica::Storable` concern + DSL
+### `Vv::Graph::Storable` concern + DSL
 
 ```ruby
 class Product < ApplicationRecord
-  include Semantica::Storable
+  include Vv::Graph::Storable
 
   triples do
     subject       -> { "urn:mm:product:#{sku}" }
@@ -115,21 +115,21 @@ MM depends on:
 - An `emit_triples!` instance method for bulk re-emission
   (`Product.find_each(&:emit_triples!)` is MM's data-migration shape).
 
-### `Semantica::EtherealGraph` concern + DSL (v0.7.0) — optional
+### `Vv::Graph::EtherealGraph` concern + DSL (v0.7.0) — optional
 
 Surface MM may consume for scopes that need a named RDF graph
 tied to an AR record's lifetime (e.g. Session, Workspace, Tenant
 contexts).
 
-- `include Semantica::EtherealGraph` — pinned name.
+- `include Vv::Graph::EtherealGraph` — pinned name.
 - `ethereal_graph do; iri ->{...}; checkpoint_on :explicit|:save; end` — pinned DSL.
 - `#hydrate_ethereal_graph!` → `{ ok:, hydrated: <integer>, reason?: :no_blob | :already_hydrated | :empty_blob }`.
 - `#checkpoint_ethereal_graph!` → `{ ok:, written: <byte_count> }`.
 - `#retract_ethereal_graph!` registered as `before_destroy`; clears the named graph + evicts the IRI from `HYDRATED_IRIS`. Blob purges via `has_one_attached … dependent: :purge_later`.
-- `Semantica::EtherealGraph.evict!(iri)` — escape hatch for multi-process operators.
-- `has_one_attached :semantica_graph_blob` — pinned attachment name (auto-registered when Active Storage is available).
+- `Vv::Graph::EtherealGraph.evict!(iri)` — escape hatch for multi-process operators.
+- `has_one_attached :vv_graph_blob` — pinned attachment name (auto-registered when Active Storage is available).
 - Active Storage is operator-supplied; MM's `Gemfile` must declare `activestorage ~> 8.0` for any scope that includes the concern.
-- Composes with `Semantica::Storable`: declare `triples do` *before* `ethereal_graph do` so the emit callback fires before checkpoint. Pinned by the composition spec.
+- Composes with `Vv::Graph::Storable`: declare `triples do` *before* `ethereal_graph do` so the emit callback fires before checkpoint. Pinned by the composition spec.
 
 ### Versioning expectation
 
@@ -203,10 +203,10 @@ bright in both directions.
 ## Requested extensions (toward v0.2.0)
 
 PLAN_0_29_1 Phase B.2 — MM's full deletion of the legacy `Triple` AR
-model + `ProductTripler` service — needs the following `Semantica::Storable`
+model + `ProductTripler` service — needs the following `Vv::Graph::Storable`
 DSL extensions before the cutover is doctrine-pure. Until they land,
 MM ships a substrate-side hybrid: simple per-record predicates via
-`Storable`; complex emissions via direct `Semantica::Sparql.execute`
+`Storable`; complex emissions via direct `Vv::Graph::Sparql.execute`
 calls in a `Product#emit_complex_triples!` instance method. The
 hybrid is explicitly interim — when v0.2.0 ships these extensions,
 that substrate-side method is deleted + the logic inlines into the
@@ -285,14 +285,14 @@ Both surfaces MM asked for landed:
 
 ```ruby
 # Sparql methods — graph: kwarg on all four
-Semantica::Sparql.select(query, graph: "urn:mm:graph:bhphoto")
-Semantica::Sparql.ask(query, graph: "urn:mm:graph:bhphoto")
-Semantica::Sparql.construct(query, graph: "urn:mm:graph:bhphoto")
-Semantica::Sparql.execute(update, graph: "urn:mm:graph:bhphoto")
+Vv::Graph::Sparql.select(query, graph: "urn:mm:graph:bhphoto")
+Vv::Graph::Sparql.ask(query, graph: "urn:mm:graph:bhphoto")
+Vv::Graph::Sparql.construct(query, graph: "urn:mm:graph:bhphoto")
+Vv::Graph::Sparql.execute(update, graph: "urn:mm:graph:bhphoto")
 
 # Storable DSL — graph "..." declaration in the triples block
 class Product < ApplicationRecord
-  include Semantica::Storable
+  include Vv::Graph::Storable
 
   triples do
     graph "urn:mm:graph:bhphoto"
@@ -317,7 +317,7 @@ New pinned reason symbols (additive on top of v0.1.0): `:invalid_graph`, `:inval
 
 ### 6. Batched-write convenience (`Sparql.bulk_insert`) — **SHIPPED (PLAN_0.4.0, v0.4.0)**
 
-Shipped surfaces: `Semantica::Sparql.bulk_insert(rows)` /
+Shipped surfaces: `Vv::Graph::Sparql.bulk_insert(rows)` /
 `bulk_delete(rows)` accept both Hash and Array row forms; single
 FFI crossing per batch via the engine's `rdf_insert_many` /
 `rdf_delete_many` scalars. Abort-batch-on-error: any malformed row
@@ -328,7 +328,7 @@ per save regardless of declared-predicate count. The substrate
 consumes:
 
 ```ruby
-Semantica::Sparql.bulk_insert([
+Vv::Graph::Sparql.bulk_insert([
   { s: "urn:mm:product:EPET2850", p: "schema:name",     o: "Epson EcoTank" },
   { s: "urn:mm:product:EPET2850", p: "schema:category", o: "printer" },
   { s: "urn:mm:product:EPET2850", p: "schema:gtin",     o: "01234567890123" },
@@ -337,7 +337,7 @@ Semantica::Sparql.bulk_insert([
 # => { ok: false, reason:, because: }
 
 # Or the positional shape:
-Semantica::Sparql.bulk_insert([
+Vv::Graph::Sparql.bulk_insert([
   ["urn:mm:product:EPET2850", "schema:name",     "Epson EcoTank"],
   # ...
 ])
@@ -356,7 +356,7 @@ Semantics:
   [`sqlite-sparql/CONSUMER_REQUIREMENT_MM.md`](https://github.com/laquereric/sqlite-sparql/blob/main/CONSUMER_REQUIREMENT_MM.md#array-argument-batched-insert-rdf_insert_many)).
   Single FFI crossing per batch; Rust loops in-engine.
 - Returns a structured envelope; never raises.
-- Symmetric `Semantica::Sparql.bulk_delete(rows)` would be natural; same
+- Symmetric `Vv::Graph::Sparql.bulk_delete(rows)` would be natural; same
   shape.
 
 `Storable` then batches its per-save emissions: instead of N
@@ -376,7 +376,7 @@ v0.1.x → v0.2.0), MM:
 3. Inlines the complex projection into `Product`'s `triples do…end` block.
 4. Deletes `ProductTripler` + `Triple` AR model + drops the `triples` SQL table.
 5. Rewrites the PLAN_0_29_1 Phase B.1 copy migration to call
-   `Semantica::Sparql.bulk_insert` in ~1000-row batches.
+   `Vv::Graph::Sparql.bulk_insert` in ~1000-row batches.
 6. Updates this file: each requested extension graduates from
    "Requested" into "Surfaces MM consumes."
 
@@ -386,4 +386,4 @@ commit hash for traceability.
 ## Contact
 
 For questions about MM's consumption pattern, see MM's
-`docs/architecture/Semantica.md` or open an issue on the MM repo.
+`docs/architecture/Vv::Graph.md` or open an issue on the MM repo.

@@ -2,7 +2,7 @@
 
 This file records the surface
 [`vv-memory`](https://github.com/laquereric/magentic-market-ai/tree/main/vendor/vv-memory)
-("VV" hereafter) consumes from `rails-semantica`. Mirrors the pattern
+("VV" hereafter) consumes from `vv-graph`. Mirrors the pattern
 in `CONSUMER_REQUIREMENT_MM.md`: upstream changes can be checked
 against a written consumer expectation — **drift** between this file
 and the gem's actual behaviour signals work that needs to land in
@@ -17,7 +17,7 @@ different speeds.
 
 - VV repo: <https://github.com/laquereric/magentic-market-ai/tree/main/vendor/vv-memory>
 - VV plan that introduced the dependency: `docs/plans/PLAN_0.1.0.md`
-  (substrate Bronze + Silver — Silver is `Semantica::EtherealGraph`).
+  (substrate Bronze + Silver — Silver is `Vv::Graph::EtherealGraph`).
 - VV plan that deepens the dependency: `docs/plans/PLAN_0.2.0.md`
   (Conformer → SPARQL-star writes through `Sparql.execute`).
 
@@ -37,38 +37,38 @@ migration trigger" below).
 
 ## The layering rule — load-bearing
 
-> **VV consumes `rails-semantica` directly.**
+> **VV consumes `vv-graph` directly.**
 > **VV does NOT consume `sqlite-sparql` directly.**
 
 Concretely:
 
-1. VV's gemspec **declares** `rails-semantica`. It **does not declare**
-   `sqlite-sparql`. The engine is `rails-semantica`'s private
+1. VV's gemspec **declares** `vv-graph`. It **does not declare**
+   `sqlite-sparql`. The engine is `vv-graph`'s private
    dependency from VV's POV.
 2. VV's `lib/`, `app/`, and `spec/` directories may reference
-   `Semantica::*` constants freely. They may **not** reference
-   `Sqlite::Sparql::*`, `Semantica::Loader`, or any `rdf_*` / `sparql_*`
+   `Vv::Graph::*` constants freely. They may **not** reference
+   `Sqlite::Sparql::*`, `Vv::Graph::Loader`, or any `rdf_*` / `sparql_*`
    scalar by name. The engine is opaque to VV.
 3. VV's spec harness loads the engine via
-   `Semantica::Loader.ensure_extension_loaded!` (the single permitted
+   `Vv::Graph::Loader.ensure_extension_loaded!` (the single permitted
    reference to the Loader) but never branches on engine version or
    scalar availability. Capability questions are answered by
-   `rails-semantica`-side predicates (see "Predicate-shaped capability
+   `vv-graph`-side predicates (see "Predicate-shaped capability
    advertisements" below), not by VV-side engine introspection.
 4. Routing inside VV's Conformer Writer expresses *what to write*
    (a parent triple + N RDF-star annotations) and lets
    `Sparql.execute` decide *how to get it into the engine*. If a
-   future `rails-semantica` release changes the dispatch_update
+   future `vv-graph` release changes the dispatch_update
    regex table, the Writer should not need to update — the
    semantics it cares about (graph-scoped INSERT of an annotated
    triple) are what's pinned, not the SPARQL form that achieves them.
 
 **Why this rule.** Two reasons:
 
-- **Engine substitutability.** If `rails-semantica` ever swaps
+- **Engine substitutability.** If `vv-graph` ever swaps
   `sqlite-sparql` for Oxigraph-embedded, Apache Jena-via-JNI, or a
   cloud Stardog, VV should not need a single line of change. The
-  whole point of `rails-semantica` is to be that abstraction
+  whole point of `vv-graph` is to be that abstraction
   boundary; VV would erase its value by reaching through it.
 - **Surface drift containment.** When the engine bumps a scalar
   signature (e.g., `sqlite-sparql` 0.7.0's `rdf_term_value` prefix
@@ -76,30 +76,30 @@ Concretely:
   `Sparql::classify_statement_error` codepath). VV inherits the
   fix for free instead of carrying a parallel audit.
 
-The corollary: **VV is encouraged to lean harder on `rails-semantica`
+The corollary: **VV is encouraged to lean harder on `vv-graph`
 surfaces over time.** When VV finds itself wanting to escape the
 facade (e.g., to construct a quoted-triple term in Ruby), the
 correct move is to file an upstream request adding the surface to
-`rails-semantica`, not to reach past it.
+`vv-graph`, not to reach past it.
 
 ## Surfaces VV consumes
 
-### `Semantica::EtherealGraph` concern — the load-bearing dependency
+### `Vv::Graph::EtherealGraph` concern — the load-bearing dependency
 
 VV's entire reason to exist is to wrap this concern. `Vv::Memory::Scoped`
-transparently `include`s `Semantica::EtherealGraph` on the host AR
+transparently `include`s `Vv::Graph::EtherealGraph` on the host AR
 record and forwards its `silver_iri` lambda into the `ethereal_graph
 do; iri ...; end` block.
 
 What VV depends on:
 
-- `include Semantica::EtherealGraph` — pinned concern name.
+- `include Vv::Graph::EtherealGraph` — pinned concern name.
 - `ethereal_graph do; iri -> {...}; checkpoint_on :explicit|:save; end` — pinned DSL.
 - `#hydrate_ethereal_graph!` — idempotent first-touch hydrate from blob → engine.
 - `#checkpoint_ethereal_graph!` — flush engine → blob.
 - `#retract_ethereal_graph!` — registered as `before_destroy`; clears the named graph + purges the blob.
-- The `:semantica_graph_blob` Active Storage attachment name (pinned upstream).
-- `Semantica::EtherealGraph.evict!(iri)` — clears the per-process hydrated-cache marker so the next call re-hydrates from blob.
+- The `:vv_graph_blob` Active Storage attachment name (pinned upstream).
+- `Vv::Graph::EtherealGraph.evict!(iri)` — clears the per-process hydrated-cache marker so the next call re-hydrates from blob.
 - The `:reason:` symbol vocabulary returned by the three lifecycle methods (`:already_hydrated`, `:no_blob`, `:empty_blob`, `:ethereal_graph_undeclared`, `:reentrant_checkpoint`). VV propagates these into its own `#memory_silver` return shapes; rename or removal is breaking.
 
 What VV explicitly does NOT introspect:
@@ -111,18 +111,18 @@ What VV explicitly does NOT introspect:
   has an opinion on the *behaviour* of hydrate over RDF-star content,
   not the byte-level shape.)
 
-### `Semantica::Sparql` four-method facade
+### `Vv::Graph::Sparql` four-method facade
 
 VV calls all four. Envelope discipline matters — VV's user-facing
 methods (`#record_episode` aside, which is AR-shaped) compose
-`rails-semantica` envelopes verbatim into their own returns. Drift
+`vv-graph` envelopes verbatim into their own returns. Drift
 in envelope keys ripples one layer up.
 
 ```ruby
-Semantica::Sparql.select(query,  graph: iri)
-Semantica::Sparql.ask(query,     graph: iri)
-Semantica::Sparql.construct(query, graph: iri)
-Semantica::Sparql.execute(update, graph: iri)
+Vv::Graph::Sparql.select(query,  graph: iri)
+Vv::Graph::Sparql.ask(query,     graph: iri)
+Vv::Graph::Sparql.construct(query, graph: iri)
+Vv::Graph::Sparql.execute(update, graph: iri)
 ```
 
 VV's expectations on each:
@@ -152,14 +152,14 @@ VV's expectations on each:
   inoculation against a regression in the classification of
   malformed quoted-triple inserts (currently green).
 
-### `Semantica::Sparql.store_size(graph: iri)`
+### `Vv::Graph::Sparql.store_size(graph: iri)`
 
 Used in VV's hydrate-side assertions to confirm content survived a
 checkpoint / evict / re-hydrate cycle. Envelope: `{ ok: true, count: <integer> }`.
 
-### `Semantica::Sparql.bulk_insert(rows, raw: true)`
+### `Vv::Graph::Sparql.bulk_insert(rows, raw: true)`
 
-VV does **not** call this directly — but `Semantica::EtherealGraph#hydrate_ethereal_graph!`
+VV does **not** call this directly — but `Vv::Graph::EtherealGraph#hydrate_ethereal_graph!`
 does, on the rows produced by its internal `parse_ntriples`. The
 indirect dependency matters because the bulk_insert raw-mode contract
 gates whether N-Triples-star content survives the round-trip (see
@@ -167,26 +167,26 @@ boundary item B1 below).
 
 ## Predicate-shaped capability advertisements (encouraged)
 
-VV would benefit from `rails-semantica` exposing more capability
+VV would benefit from `vv-graph` exposing more capability
 predicates. The existing one VV needs:
 
-- **`Semantica.rdf_star_writes_enabled? → Boolean`** — pinned in
+- **`Vv::Graph.rdf_star_writes_enabled? → Boolean`** — pinned in
   PLAN_0.8.0 Phase E. Not yet implemented at the time of writing
   (rails-semantica 0.7.0). VV's `Vv::Memory.rdf_star_writes_enabled?`
   delegates if defined, otherwise falls back to
-  `defined?(::Semantica::EtherealGraph)` — adequate under the P1
+  `defined?(::Vv::Graph::EtherealGraph)` — adequate under the P1
   pin posture, but the upstream predicate is the source of truth
   once 0.8.0 ships.
 
 Predicates VV would consume if they existed:
 
-- `Semantica.checkpoint_can_round_trip?(content_kind:)` —
+- `Vv::Graph.checkpoint_can_round_trip?(content_kind:)` —
   `:plain_ntriples` / `:ntriples_star`. The honest answer for
-  `rails-semantica` 0.7.0 is `true` / `false` respectively (see
+  `vv-graph` 0.7.0 is `true` / `false` respectively (see
   boundary item B1). Letting VV ask the question rather than infer
   from gem version would mean VV's hydrate-blocking spec can
   un-pend automatically when upstream answers `true`.
-- `Semantica.facade_version → String` — capability epoch independent
+- `Vv::Graph.facade_version → String` — capability epoch independent
   of `VERSION`. Lets VV reason about "is the `annotate` DSL
   reachable" without parsing the gem's gemspec.
 
@@ -194,9 +194,9 @@ The general principle: **VV would rather call a predicate than
 introspect a version.** Predicates are testable, version strings
 are not.
 
-## Boundary items — open requests back to `rails-semantica`
+## Boundary items — open requests back to `vv-graph`
 
-These are concrete asks VV has on `rails-semantica`'s roadmap. They
+These are concrete asks VV has on `vv-graph`'s roadmap. They
 are recorded here so the next operator working either repo sees the
 two-sided commitment.
 
@@ -220,7 +220,7 @@ constraint in v0.2.0's README, but the constraint is awkward; it
 makes Silver effectively non-portable across process restarts
 when star content is present.
 
-**Upstream response (2026-05-24).** `rails-semantica` rewrote
+**Upstream response (2026-05-24).** `vv-graph` rewrote
 PLAN_0.13.0 same-day to scope the fix as part of its expanded
 "VV-driven consumer alignment + Scope" framing. Implementation
 is pending in that plan. VV's regression spec
@@ -251,7 +251,7 @@ of N-Triples-star content), not the implementation.
 (Gold tier + Curator) lists this fix as a **hard prerequisite**.
 The Gold `gold:facts` graph is annotation-heavy and cannot
 survive evict without the fix. The dependency chain is:
-`rails-semantica` PLAN_0.13.0 (B1 fix) → `vv-memory` PLAN_0.2.0
+`vv-graph` PLAN_0.13.0 (B1 fix) → `vv-memory` PLAN_0.2.0
 Phase D integration spec (un-pends) → `vv-memory` PLAN_0.3.0
 implementation start.
 
@@ -261,7 +261,7 @@ implementation start.
 
 VV's Conformer Writer under P1 interpolates raw SPARQL-star UPDATE
 strings into a heredoc and dispatches via `Sparql.execute`. This
-works and is currently the canonical shape inside `rails-semantica`
+works and is currently the canonical shape inside `vv-graph`
 itself (PLAN_0.9.0 / 0.10.0 / 0.12.0 Phase B implementations all
 emit RDF-star provenance the same way). Landing PLAN_0.8.0 Phase B
 turns the Writer's one method into a DSL block and lifts
@@ -275,7 +275,7 @@ Phase B all shipping raw `Sparql.execute` without waiting on this
 DSL) lowers the urgency: this is a Writer-internal ergonomics
 improvement when it arrives, not a semantic correction.
 
-### B3 — `Semantica::Scope` value object (PLAN_0.13.0)
+### B3 — `Vv::Graph::Scope` value object (PLAN_0.13.0)
 
 **Severity: forward-compat. Status: ✅ closed 2026-05-24.**
 
@@ -285,22 +285,22 @@ landed in commit `2e44f35` alongside the Phase-A batch for v0.8.0
 through v0.12.0. PLAN_0.13.0 was rewritten same-day to anchor on
 the VV consumer signal, formalise the Scope contract, and ship
 the predicate-shaped capability advertisements
-(`Semantica.rdf_star_writes_enabled?` etc.) that VV's layering
+(`Vv::Graph.rdf_star_writes_enabled?` etc.) that VV's layering
 rule needs.
 
 The eventual VV v0.3.0+ `Curator` (`vendor/vv-memory/docs/plans/PLAN_0.3.0.md`)
 and v0.4.0+ recall facade (`vendor/vv-memory/docs/plans/PLAN_0.4.0.md`
-sketch) both anchor their cross-graph operations on `Semantica::Scope`
+sketch) both anchor their cross-graph operations on `Vv::Graph::Scope`
 rather than re-inventing scope semantics — the original ask of
 this boundary item.
 
-### B4 — PLAN_0.14.0 Path A (`Semantica::Decision`) is in the wrong layer
+### B4 — PLAN_0.14.0 Path A (`Vv::Graph::Decision`) is in the wrong layer
 
 **Severity: layering correction. Status: filed 2026-05-25, awaiting upstream re-frame.**
 
-`rails-semantica`'s draft PLAN_0.14.0 surveys the upstream Python
+`vv-graph`'s draft PLAN_0.14.0 surveys the upstream Python
 project [`semantica-agi/semantica`][upstream-decisions] and
-recommends **Path A** — a `Semantica::Decision` concern with
+recommends **Path A** — a `Vv::Graph::Decision` concern with
 verb-shaped methods (`record_decision`, `trace_decision_chain`,
 `find_similar_decisions`, `analyze_decision_impact`,
 `check_decision_rules`) implemented as a Storable extension. The
@@ -308,7 +308,7 @@ implementation draft PLAN_0.14.1 builds on it.
 
 [upstream-decisions]: https://github.com/semantica-agi/semantica
 
-**VV's response: Path A does not belong in `rails-semantica`.**
+**VV's response: Path A does not belong in `vv-graph`.**
 
 The architectural reason — articulated in
 `vendor/../docs/research/DecisionLayer.md` in the substrate
@@ -322,25 +322,25 @@ The substrate stack has three concerns, not two:
 
 | Layer | Concern | Home |
 |---|---|---|
-| Graph | Triple storage + reasoning | `rails-semantica` |
+| Graph | Triple storage + reasoning | `vv-graph` |
 | Memory | Bronze/Silver/Gold lifecycle | `vv-memory` |
 | Decision flow | context → query → decide → act lifecycle | **A new gem (working title `vv-decisions`)** — not yet drafted |
 
 Path A's responsibility belongs in that third layer. Routing it
-into `rails-semantica` widens the graph gem's lane past "I store
+into `vv-graph` widens the graph gem's lane past "I store
 and reason over triples" into "I own how an agent makes a
 decision." That's a different invariant.
 
 **Recommended re-frame for PLAN_0.14.0.**
 
-- **Path A — drop from `rails-semantica`'s direction-set.** The
+- **Path A — drop from `vv-graph`'s direction-set.** The
   spirit lives in a future `vv-decisions` gem above
   `vv-memory`. The decision-flow lifecycle, the aggregate root,
   the `deliberate(...)` entrypoint, the `trace_back` /
   `alternatives_considered` / `impact` read surface all live
   there. See `DecisionLayer.md` for the sketch.
 - **Path B — MCP server + Claude Code plugin bundle.** Stays
-  in lane. Exposes the existing `Semantica::*` facades as MCP
+  in lane. Exposes the existing `Vv::Graph::*` facades as MCP
   tools. No new conceptual responsibility on the gem. **VV
   endorses Path B.**
 - **Path C — Knowledge Explorer Rails engine.** Stays in lane.
@@ -359,7 +359,7 @@ decision-shaped.
 **Two misfiled PLAN drafts.** PLAN_0.14.0 and PLAN_0.14.1 landed
 as `vendor/vv-memory/docs/plans/PLAN_0.5.0.md` and
 `PLAN_0.5.1.md`. VV `git rm`'d those (commit on the parent repo
-side); they should not be moved into `rails-semantica`'s plans
+side); they should not be moved into `vv-graph`'s plans
 directory in their current form because their content commits
 to Path A. If/when the maintainer re-frames PLAN_0.14.0 to
 endorse Path B or Path C without Path A, the re-framed plan
@@ -379,7 +379,7 @@ replacing it.
 
 Upstream is free to change these without notifying VV:
 
-- The exact contents of the `:semantica_graph_blob` Active Storage
+- The exact contents of the `:vv_graph_blob` Active Storage
   attachment's filename (sanitised slug; VV never inspects it).
 - The internal ordering of dispatch_update's regex-fast-path table —
   VV cares that the *semantics* of "graph-scoped INSERT of an
@@ -399,40 +399,40 @@ Upstream is free to change these without notifying VV:
 ## Engine — explicitly not VV's concern
 
 VV's gemspec **does not** add `sqlite-sparql` as a dependency. VV's
-`Gemfile.lock` happens to contain it transitively via `rails-semantica`,
+`Gemfile.lock` happens to contain it transitively via `vv-graph`,
 which is the desired posture: VV is unaware of the engine's name,
 version, or build artefact, except for the single permitted
-`Semantica::Loader.ensure_extension_loaded!` call in the spec harness.
+`Vv::Graph::Loader.ensure_extension_loaded!` call in the spec harness.
 
 Concretely, if a maintainer is tempted to:
 
 - `require "sqlite_sparql"` somewhere in VV's `lib/` — **don't.**
-  File a request against `rails-semantica` to expose the surface
+  File a request against `vv-graph` to expose the surface
   you wanted to reach.
 - Branch on the engine's CHANGELOG entries — **don't.** Branch on
-  a `rails-semantica` predicate (existing or proposed in
+  a `vv-graph` predicate (existing or proposed in
   "Predicate-shaped capability advertisements" above).
 - Add a VV-side scalar like `rdf_*` or `sparql_*` reference for
   performance — **don't.** The performance question belongs in
-  `rails-semantica`'s bulk-write facade or a new one; the consumer
+  `vv-graph`'s bulk-write facade or a new one; the consumer
   is the wrong layer to optimise it.
 
 This is not a hostile boundary — it's a deliberate one. VV exists
 *so that* consumers (MM, future Rails apps) get a one-line `include`
 shape on top of a complex Silver-tier substrate. The layering only
 holds if VV maintains the same discipline relative to *its*
-substrate (`rails-semantica`) that it offers its own consumers.
+substrate (`vv-graph`) that it offers its own consumers.
 
 ## Versioning expectation
 
-While `rails-semantica` is v0.x.x, VV tracks the path-sourced rev
+While `vv-graph` is v0.x.x, VV tracks the path-sourced rev
 directly via the `~> 0.7` pin. At rails-semantica v1.0 the surfaces
 above are pinned by semver. VV will move from `~> 0.7` / `>= 0.8`
 era pins to the standard `~> 1.x` pattern at that point.
 
 ## Drift signals
 
-A drift between this file and `rails-semantica`'s behaviour is
+A drift between this file and `vv-graph`'s behaviour is
 detectable in:
 
 - `vendor/vv-memory/spec/vv/memory/scoped_integration_spec.rb` —
@@ -451,7 +451,7 @@ detectable in:
 - `vendor/vv-memory/bin/check` — wraps the three above + the Bronze
   AR specs.
 
-When `rails-semantica` ships a release that changes one of the
+When `vv-graph` ships a release that changes one of the
 surfaces enumerated above, the upstream PR description should
 reference this file. The VV-side adaptation lands in a follow-up
 commit that updates this file's relevant section in the same patch.

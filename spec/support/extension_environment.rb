@@ -10,7 +10,7 @@
 #
 # Specs that need a live store tag themselves `:requires_extension`;
 # spec_helper.rb skips them when this module reports unavailable.
-module Semantica
+module Vv::Graph
   module SpecSupport
     module ExtensionEnvironment
       class << self
@@ -52,11 +52,11 @@ module Semantica
             require "active_record"
             require "sqlite3"
           rescue LoadError => e
-            @skip_reason = "skipping — required gems not loadable (#{e.message}). Run `bundle install` inside vendor/rails-semantica."
+            @skip_reason = "skipping — required gems not loadable (#{e.message}). Run `bundle install` inside vendor/vv-graph."
             return
           end
 
-          ext_path = ::Semantica::Loader.extension_path
+          ext_path = ::Vv::Graph::Loader.extension_path
           unless ext_path
             @skip_reason = build_hint
             return
@@ -64,7 +64,7 @@ module Semantica
 
           begin
             ::ActiveRecord::Base.establish_connection(adapter: "sqlite3", database: ":memory:")
-            ::Semantica::Loader.ensure_extension_loaded!
+            ::Vv::Graph::Loader.ensure_extension_loaded!
             ::ActiveRecord::Base.connection.execute("SELECT rdf_count()")
           rescue StandardError => e
             @skip_reason = "skipping — extension found at #{ext_path} but failed to load: #{e.message}"
@@ -78,7 +78,7 @@ module Semantica
           <<~HINT.strip
             skipping — sqlite-sparql extension not built. Build with:
               cd vendor/sqlite-sparql && cargo build --release
-            Or set MM_SQLITE_SPARQL_PATH to an already-built .dylib / .so.
+            Or set VV_GRAPH_SQLITE_SPARQL_PATH to an already-built .dylib / .so.
           HINT
         end
       end

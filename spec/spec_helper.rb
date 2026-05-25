@@ -2,7 +2,7 @@
 
 $LOAD_PATH.unshift File.expand_path("../lib", __dir__)
 
-require "rails-semantica"
+require "vv-graph"
 require_relative "support/extension_environment"
 
 RSpec.configure do |config|
@@ -28,9 +28,9 @@ RSpec.configure do |config|
   # failing the suite — the gem can be exercised at the contract /
   # envelope level without the engine present.
   config.before(:each, :requires_extension) do
-    unless Semantica::SpecSupport::ExtensionEnvironment.available?
-      skip Semantica::SpecSupport::ExtensionEnvironment.skip_reason
+    unless Vv::Graph::SpecSupport::ExtensionEnvironment.available?
+      skip Vv::Graph::SpecSupport::ExtensionEnvironment.skip_reason
     end
-    Semantica::SpecSupport::ExtensionEnvironment.reset_store!
+    Vv::Graph::SpecSupport::ExtensionEnvironment.reset_store!
   end
 end
