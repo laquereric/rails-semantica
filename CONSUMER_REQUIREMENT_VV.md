@@ -294,6 +294,87 @@ sketch) both anchor their cross-graph operations on `Semantica::Scope`
 rather than re-inventing scope semantics — the original ask of
 this boundary item.
 
+### B4 — PLAN_0.14.0 Path A (`Semantica::Decision`) is in the wrong layer
+
+**Severity: layering correction. Status: filed 2026-05-25, awaiting upstream re-frame.**
+
+`rails-semantica`'s draft PLAN_0.14.0 surveys the upstream Python
+project [`semantica-agi/semantica`][upstream-decisions] and
+recommends **Path A** — a `Semantica::Decision` concern with
+verb-shaped methods (`record_decision`, `trace_decision_chain`,
+`find_similar_decisions`, `analyze_decision_impact`,
+`check_decision_rules`) implemented as a Storable extension. The
+implementation draft PLAN_0.14.1 builds on it.
+
+[upstream-decisions]: https://github.com/semantica-agi/semantica
+
+**VV's response: Path A does not belong in `rails-semantica`.**
+
+The architectural reason — articulated in
+`vendor/../docs/research/DecisionLayer.md` in the substrate
+parent repo — is that decisions are not triple-shaped. They are a
+**flow**: context → query → reasoning → decision → action →
+impact. Each step carries provenance distinct from the others. A
+Storable concern emitting triples about a decision's *outcome*
+discards the structure of the *flow*.
+
+The substrate stack has three concerns, not two:
+
+| Layer | Concern | Home |
+|---|---|---|
+| Graph | Triple storage + reasoning | `rails-semantica` |
+| Memory | Bronze/Silver/Gold lifecycle | `vv-memory` |
+| Decision flow | context → query → decide → act lifecycle | **A new gem (working title `vv-decisions`)** — not yet drafted |
+
+Path A's responsibility belongs in that third layer. Routing it
+into `rails-semantica` widens the graph gem's lane past "I store
+and reason over triples" into "I own how an agent makes a
+decision." That's a different invariant.
+
+**Recommended re-frame for PLAN_0.14.0.**
+
+- **Path A — drop from `rails-semantica`'s direction-set.** The
+  spirit lives in a future `vv-decisions` gem above
+  `vv-memory`. The decision-flow lifecycle, the aggregate root,
+  the `deliberate(...)` entrypoint, the `trace_back` /
+  `alternatives_considered` / `impact` read surface all live
+  there. See `DecisionLayer.md` for the sketch.
+- **Path B — MCP server + Claude Code plugin bundle.** Stays
+  in lane. Exposes the existing `Semantica::*` facades as MCP
+  tools. No new conceptual responsibility on the gem. **VV
+  endorses Path B.**
+- **Path C — Knowledge Explorer Rails engine.** Stays in lane.
+  Visualisation of existing graph state. **VV endorses Path C
+  as acceptable** (larger scope; lower per-LOC ROI than B).
+
+What VV would consume from Path B specifically: an MCP tool
+surface that exposes `Sparql.{select,construct,execute}` +
+`Reasoner.materialise!` + `Shacl.validate` + `EtherealGraph`
+lifecycle, all `scope:`-aware. The future `vv-decisions` gem's
+`deliberate(...)` block would compose with those MCP tools when
+the agent under deliberation is itself an MCP-aware coding
+agent, but the gem-side primitives stay graph-shaped, not
+decision-shaped.
+
+**Two misfiled PLAN drafts.** PLAN_0.14.0 and PLAN_0.14.1 landed
+as `vendor/vv-memory/docs/plans/PLAN_0.5.0.md` and
+`PLAN_0.5.1.md`. VV `git rm`'d those (commit on the parent repo
+side); they should not be moved into `rails-semantica`'s plans
+directory in their current form because their content commits
+to Path A. If/when the maintainer re-frames PLAN_0.14.0 to
+endorse Path B or Path C without Path A, the re-framed plan
+belongs in `rails-semantica/docs/plans/PLAN_0.14.0.md` and is
+welcome.
+
+**Downstream implication.** vv-memory's PLAN_0.2.0 Conformer
+ships its own `vvmem:` provenance vocabulary on Silver
+annotations as drafted; nothing in this boundary item changes
+the v0.2.0 contract. When `vv-decisions` ships, it adds a
+sibling `vvdec:` namespace for decision-flow-specific
+predicates and likely a Conformer `DecisionExtractor`
+subclass — extending vv-memory's existing surface, not
+replacing it.
+
 ## Behaviours VV does NOT depend on
 
 Upstream is free to change these without notifying VV:
