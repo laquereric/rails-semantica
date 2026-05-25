@@ -14,8 +14,15 @@ Three small layers, each opt-in:
 | Layer | Class | Responsibility |
 |---|---|---|
 | **Loader** | `Semantica::Loader` | Boots the sqlite-sparql extension across AR connection-pool restarts. Idempotent. |
-| **Sparql facade** | `Semantica::Sparql` | `select` / `ask` / `construct` returning `{ ok:, results:/value:/ntriples: }` envelopes. Never raises. |
-| **Storable concern** | `Semantica::Storable` | Per-model `triples do ... end` DSL. After-save / after-destroy lifecycle hooks emit / retract triples. |
+| **Sparql facade** | `Semantica::Sparql` | `select` / `ask` / `construct` / `execute` / `bulk_insert` / `bulk_delete` returning `{ ok:, results:/value:/ntriples:/count:/inserted:/deleted: }` envelopes. Never raises. `quoted_triple(s,p,o)` marker for RDF-star writes (v0.14.0). |
+| **Storable concern** | `Semantica::Storable` | Per-model `triples do ... end` DSL. After-save / after-destroy lifecycle hooks emit / retract triples. `annotate` block attaches RDF-star annotations to a `triple` (v0.14.0). |
+| **EtherealGraph concern** | `Semantica::EtherealGraph` | Per-AR-record named graphs with Active Storage durability (v0.7.0). |
+| **Reasoner** | `Semantica::Reasoner` | OWL 2 RL forward-chaining `materialise!` with rule library + fixpoint iteration + RDF-star `:derivedBy` provenance. |
+| **Shacl validator** | `Semantica::Shacl` | SHACL Core `validate` against a shapes graph; writes a W3C `sh:ValidationReport`. |
+| **Shacl Rules** | `Semantica::Shacl::Rules` | Shape-scoped derivation via `sh:TripleRule` / `sh:SPARQLRule`. |
+| **Scope** | `Semantica::Scope` | Five-role value object (`data` / `schema` / `shapes` / `inferred` / `report`) accepted as `scope:` kwarg on every facade. |
+| **ChangeSet** | `Semantica::ChangeSet` | `capture(scope:) { … }` block records adds + retracts from write paths. |
+| **Capability predicates** | `Semantica.*?` | `rdf_star_writes_enabled?`, `facade_version`, `checkpoint_can_round_trip?(content_kind:)` — operators ask "can this gem do X?" instead of parsing `VERSION`. |
 
 ## Prerequisites
 
@@ -269,6 +276,250 @@ ctx.destroy!                    # CLEAR GRAPH + purges blob
   `Semantica::EtherealGraph.evict!(iri)` is the explicit escape
   hatch.
 
+### RDF-star — `annotate` DSL + `Sparql.quoted_triple` (v0.14.0)
+
+Attach metadata to a single triple — provenance, confidence,
+attribution, timestamps — without standard-reification's
+four-triple verbose pattern. Engine ≥ 0.7.0 round-trips
+quoted-triple terms (`<< s p o >>`) across every read and write
+path; v0.14.0 surfaces the operator-facing seams.
+
+```ruby
+class Product < ApplicationRecord
+  include Semantica::Storable
+
+  triples do
+    subject -> { "urn:mm:product:#{sku}" }
+    triple "schema:gtin", -> { gtin } do
+      annotate "mm:reportedBy", -> { "<urn:mm:user:#{updater_id}>" }
+      annotate "mm:confidence", -> { confidence },
+               if: -> { confidence.present? }
+    end
+  end
+end
+
+Product.create!(sku: "P1", gtin: "1234567890123", updater_id: 42, confidence: 0.87)
+
+# Annotation reachable via the quoted-triple pattern:
+Semantica::Sparql.select(<<~SPARQL)
+  SELECT ?u WHERE {
+    << <urn:mm:product:P1> <schema:gtin> "1234567890123" >> <mm:reportedBy> ?u
+  }
+SPARQL
+# => { ok: true, results: [{ "u" => "<urn:mm:user:42>" }] }
+```
+
+Emission cycle per save:
+
+1. **Retract** orphan annotations on the prior parent value's
+   quoted-triple subject (catches `update!` that changes the
+   parent object — referential opacity orphans prior annotations
+   per the SPARQL-star spec).
+2. **Replace** the parent triple via the existing read-replace.
+3. **Emit** annotations on the new quoted-triple subject.
+
+Destroy retracts the parent triple AND every annotation. Parent
+`if:` false → both skip. Annotation `if:` false → only that
+annotation skips.
+
+Bulk write also accepts RDF-star rows:
+
+```ruby
+Semantica::Sparql.bulk_insert([
+  # Hash form with a nested 3-element Array as the quoted triple:
+  { s: ["urn:mm:p:1", "schema:gtin", "1234567890123"],
+    p: "mm:reportedBy",
+    o: "<urn:mm:user:42>" },
+
+  # Or with the explicit marker:
+  { s: Semantica::Sparql.quoted_triple("urn:mm:p:1", "schema:gtin", "1234567890123"),
+    p: "mm:reportedAt",
+    o: "2026-05-24T00:00:00Z" },
+])
+# Predicate position stays IRI-only per the W3C SPARQL-star contract;
+# quoted-triple in :p refuses :invalid_dsl.
+```
+
+### OWL 2 RL reasoning — `Semantica::Reasoner` (v0.9.0)
+
+Forward-chaining `materialise!` over an asserted graph; emits
+the closure into a paired inferred graph. The Phase B core rule
+library ships 15 rules covering the most-used OWL 2 RL patterns
+(subClassOf / subPropertyOf transitive closures, instance-type
+propagation, domain / range entailment, transitive / symmetric /
+inverse / functional property characteristics, sameAs closure).
+The remaining ~55 W3C rules are catalogued in
+`Rules::PHASE_B_PENDING` as mechanical transcriptions deferred
+to follow-up phases.
+
+```ruby
+Semantica::Reasoner.materialise!(
+  asserted:  "urn:mm:graph:catalogue",
+  inferred:  "urn:mm:graph:catalogue:inferred",
+  rules:     :owl_2_rl,
+  provenance: true,            # default; emits :derivedBy annotations
+  max_iterations: 50,
+)
+# => { ok: true, iterations: 3, derived: 7, fixpoint: true,
+#      per_rule: { "scm-sco" => 4, "cax-sco" => 3, ... } }
+```
+
+When `provenance: true` (default), each derived triple carries
+a `<< s p o >> <urn:semantica:derivedBy> <rule_iri>` annotation
+(rule IRI shape: `urn:semantica:reasoner:rule:<id>`). Operators
+audit the closure by querying the annotation:
+
+```ruby
+Semantica::Sparql.select(<<~SPARQL, graph: "urn:mm:graph:catalogue:inferred")
+  SELECT ?inferred WHERE {
+    ?inferred ?p ?o .
+    << ?inferred ?p ?o >> <urn:semantica:derivedBy>
+                          <urn:semantica:reasoner:rule:scm-sco>
+  }
+SPARQL
+```
+
+`:derivedAt NOW()` + `:derivedFrom << premise >>` are
+documented as deferred (idempotency guard + per-rule premise
+binding pending). `provenance: false` skips the rewrite entirely.
+
+Refusal: `:reasoner_diverged` when `max_iterations` hits without
+fixpoint — envelope includes `iterations:` + `per_rule:` for
+diagnostics.
+
+### SHACL Core validation — `Semantica::Shacl` (v0.10.0)
+
+Walks `shapes_graph` for `sh:NodeShape` declarations, resolves
+focus nodes via `sh:targetClass` / `sh:targetNode` against
+`data_graph`, evaluates 12 SHACL Core constraint components on
+each property shape, writes a W3C-conformant `sh:ValidationReport`
+graph.
+
+```ruby
+Semantica::Shacl.validate(
+  data_graph:   "urn:mm:graph:catalogue",
+  shapes_graph: "urn:semantica:shapes:product",
+  report_graph: "urn:mm:graph:catalogue:report",
+)
+# => { ok: true, conforms: false,
+#      violations: [
+#        { focus_node: "<urn:mm:product:1>", path: "<schema:gtin>",
+#          source_constraint_component: "<…#MinCountConstraintComponent>",
+#          severity: "<…#Violation>", value: nil,
+#          message: "expected at least 1 value(s); got 0" },
+#        ...
+#      ],
+#      report_graph: "urn:mm:graph:catalogue:report" }
+```
+
+Core library ships: `sh:minCount`, `sh:maxCount`, `sh:datatype`,
+`sh:nodeKind`, `sh:class`, `sh:pattern`, `sh:minLength`,
+`sh:maxLength`, `sh:in`, `sh:hasValue`, `sh:minInclusive`,
+`sh:maxInclusive`. The remaining ~18 components are catalogued
+in `Constraints::PHASE_B_PENDING`; shapes using a pending
+parameter refuse `:unknown_constraint_component` rather than
+silently conforming.
+
+### SHACL Rules — shape-scoped derivation (v0.12.0)
+
+Operator-authored derivation via `sh:rule` attachments on a
+`sh:NodeShape`. Supports `sh:TripleRule` (single-triple
+derivation) and `sh:SPARQLRule` (embedded CONSTRUCT). `sh:order`
+ordering, `sh:deactivated` skip, `sh:condition` gating via
+recursive `Shacl.validate`.
+
+```ruby
+Semantica::Shacl::Rules.materialise!(
+  data_graph:   "urn:mm:graph:catalogue",
+  shapes_graph: "urn:semantica:shapes:product",
+  inferred:     "urn:mm:graph:catalogue:inferred",
+)
+# => { ok: true, iterations: 1, rules_fired: 2,
+#      derived: 5, per_rule: { "urn:rule:1" => 3, ... },
+#      fixpoint: true }
+```
+
+`?this` in `sh:SPARQLRule`'s CONSTRUCT + WHERE blocks resolves
+to the focus node. `sh:JSRule` refuses
+`:unknown_rule_type` (no JS runtime in-process).
+
+### Change-set capture — `Semantica::ChangeSet` (v0.11.0)
+
+Boundary object for incremental reasoning / validation. Records
+adds and retracts from `Sparql.execute INSERT DATA / DELETE DATA`
+and `bulk_insert` / `bulk_delete` write paths.
+
+```ruby
+scope = Semantica::Scope.new(
+  data:     "urn:mm:graph:catalogue",
+  inferred: "urn:mm:graph:catalogue:inferred",
+)
+
+changes = Semantica::ChangeSet.capture(scope: scope) do
+  Semantica::Sparql.bulk_insert([
+    ["urn:p:1", "schema:gtin", '"1234567890123"', scope.data],
+  ])
+end
+
+changes.added      # => [["urn:p:1", "schema:gtin", '"…"', "urn:mm:graph:catalogue"]]
+changes.retracted  # => []
+```
+
+Arbitrary SPARQL UPDATE forms (INSERT WHERE, MOVE, COPY) cannot
+be observed without re-querying — operators call
+`ChangeSet.record_add` / `record_retract` manually for those.
+Nested `capture` blocks refuse `NestedCaptureError`.
+
+### Cross-graph scopes — `Semantica::Scope` (v0.13.0)
+
+The five-role value object every facade accepts as `scope:`:
+
+```ruby
+scope = Semantica::Scope.new(
+  data:     "urn:mm:graph:workspace_42",
+  schema:   "urn:mm:graph:shared:schema",
+  shapes:   "urn:semantica:shapes:product",
+  inferred: "urn:mm:graph:workspace_42:inferred",
+  report:   "urn:mm:graph:workspace_42:report",
+)
+
+Semantica::Reasoner.materialise!(scope: scope, rules: :owl_2_rl)
+Semantica::Shacl.validate(scope: scope)
+Semantica::Shacl::Rules.materialise!(scope: scope)
+Semantica::Sparql.select("SELECT * WHERE { ?s ?p ?o }", scope: scope)
+```
+
+`Semantica::Scope.from_(graph_iri)` returns a degenerate
+single-graph Scope (for ergonomic porting of per-kwarg call
+sites). Refusal envelopes pinned: `:scope_kwarg_conflict` (both
+`scope:` + an overlapping per-graph kwarg), `:scope_role_missing`
+(facade needs a role the Scope omits), `:scope_read_write_overlap`
+(`inferred` / `report` shares an IRI with a read role).
+
+### Capability predicates (v0.13.0)
+
+Operators ask "can this gem do X?" via a predicate rather than
+parsing the `VERSION` string. The predicates are
+introspection-driven — they reflect runtime state, not a static
+flag — so capabilities flip automatically when their backing
+surface ships.
+
+```ruby
+Semantica.rdf_star_writes_enabled?
+# => true (Sparql.quoted_triple is defined since v0.14.0)
+
+Semantica.facade_version
+# => "0.14.0" — capability epoch; compare via Gem::Version
+
+Semantica.checkpoint_can_round_trip?(content_kind: :plain_ntriples)
+# => true (since v0.7.0)
+Semantica.checkpoint_can_round_trip?(content_kind: :ntriples_star)
+# => true (since v0.13.0 Phase B's split_ntriple balanced-bracket fix)
+
+Semantica.checkpoint_can_round_trip?(content_kind: :nope)
+# => raises ArgumentError naming the known content_kinds
+```
+
 ## Concurrency
 
 Engine ≥ 0.2.0 holds one Oxigraph store per process, shared across
@@ -367,6 +618,26 @@ heading + a coordinated substrate bump):
 - `Semantica::EtherealGraph.evict!(iri)` escape hatch.
 - New `:reason` symbols: `:no_blob`, `:already_hydrated`, `:empty_blob`, `:ethereal_graph_undeclared`.
 
+**Pinned at v0.13.0** (additive on top of v0.7.0; six PLANs land between):
+
+- **SPARQL-star pass-through** (v0.8.0 Phase A) — `Sparql.{select,ask,construct,execute}` accept `<< s p o >>` quoted-triple syntax verbatim; bindings come back as N-Triples-star strings. Multi-line `INSERT DATA` bodies route through `INSERT WHERE` (the `rdf_load_ntriples` fast path is line-strict).
+- **`Semantica::Reasoner`** (v0.9.0) — `materialise!(asserted:, inferred:, rules:, provenance:, max_iterations:)` envelope `{ ok:, iterations:, derived:, fixpoint:, per_rule: }`. `Rules::OwlRl` (15 core W3C OWL 2 RL rules); `Rules::PHASE_B_PENDING` lists the deferred ~55. Refusals: `:invalid_graph`, `:invalid_dsl`, `:rule_set_unknown`, `:reasoner_diverged`.
+- **`Semantica::Shacl`** (v0.10.0) — `validate(data_graph:, shapes_graph:, report_graph:, provenance:)` envelope `{ ok:, conforms:, violations:, report_graph: }`. `Constraints::Core` (12 SHACL Core components); `Constraints::PHASE_B_PENDING` lists the deferred ~18. Validation report is a W3C-conformant `sh:ValidationReport` graph with the six pinned predicates per `sh:ValidationResult`. Refusals: `:shape_parse_error`, `:unknown_constraint_component`, `:cycle_detected`.
+- **`Semantica::ChangeSet`** (v0.11.0) — value object + `capture(scope:) { … }` block API. Records adds/retracts from `Sparql.execute INSERT DATA / DELETE DATA` and `bulk_insert` / `bulk_delete`. Nested captures raise `NestedCaptureError`; cross-scope writes raise `ScopeMismatch`.
+- **`Semantica::Shacl::Rules`** (v0.12.0) — `materialise!(data_graph:, shapes_graph:, inferred:, rules:, provenance:, max_iterations:)` envelope `{ ok:, iterations:, rules_fired:, derived:, per_rule:, fixpoint: }`. `Rule` / `TripleRule` / `SparqlRule` value-object hierarchy. `sh:order` ordering, `sh:deactivated` skip, `sh:condition` gating via recursive `Shacl.validate`. Refusals: `:rule_parse_error`, `:unknown_rule_type`, `:condition_shape_missing`.
+- **`Semantica::Scope`** value object (v0.13.0) — five roles (`data` / `schema` / `shapes` / `inferred` / `report`) + `additional:` Hash; `#read_graphs` / `#write_graphs` / `#read_write_overlap?` / value equality / `Scope.registry`; `Scope.from_(iri)` factory; `Scope::FacadeAdapter` shared resolver.
+- **`scope:` kwarg** on every facade (v0.13.0) — `Sparql.{select,ask,construct,execute}`, `Reasoner.materialise!`, `Shacl.validate`, `Shacl::Rules.materialise!`, `ChangeSet.capture`. Refusals: `:scope_kwarg_conflict`, `:scope_role_missing`, `:scope_read_write_overlap`.
+- **`Sparql.split_ntriple`** (v0.13.0) recognises `<< s p o >>` as a single token (balanced-bracket on `<<` / `>>` pairs); `EtherealGraph` hydrate round-trips N-Triples-star blob contents.
+- **Capability predicates** (v0.13.0) — `Semantica.rdf_star_writes_enabled?`, `Semantica.facade_version`, `Semantica.checkpoint_can_round_trip?(content_kind:)`. Introspection-driven (no version constants); content_kind: `:plain_ntriples` / `:ntriples_star`; unknown kinds raise `ArgumentError`.
+- **Engine floor** bumped to `sqlite-sparql ≥ 0.8.0`.
+
+**Pinned at v0.14.0** (additive on top of v0.13.0):
+
+- **`Semantica::Sparql.quoted_triple(s, p, o)`** — operator-facing marker (frozen `QuotedTriple` Struct) with recursive `to_ntriples_star` for nested quoted triples (`<< << s p o >> p o >>`). Accepted in `Sparql.bulk_insert` / `bulk_delete` row `:s` and `:o` positions; recognised by `Storable::TermSerializer.iri` / `.object`.
+- **`Storable` `annotate` block** inside `triple` declarations — attaches RDF-star annotations to the parent triple's quoted-triple form. Annotation `if:` falsy skips; parent `if:` falsy skips both. Update-time parent-object changes orphan prior annotations (SPARQL-star referential opacity); destroy retracts the whole chain.
+- **`bulk_insert` row shapes for RDF-star** — `QuotedTriple` marker OR 3-element nested Array `[s, p, o]` shorthand in `:s` / `:o`. Predicate position stays IRI-only; quoted-predicate refuses `:invalid_dsl`. Pre-serialised `<< s p o >>` strings work via `raw: true`.
+- **`Reasoner` `:derivedBy` provenance** — every derived triple gets `<< s p o >> <urn:semantica:derivedBy> <urn:semantica:reasoner:rule:<id>>` when `provenance: true` (default). `Semantica::Reasoner.rule_iri(rule_id)` factory. `:derivedAt` + `:derivedFrom` predicate IRIs reserved; values deferred to a follow-up phase. `Semantica.rdf_star_writes_enabled?` flips to `true`.
+
 **Still operator-fluid** (may change without deprecation cycle
 during v0.x.x):
 
@@ -413,6 +684,27 @@ isn't on disk.
   cross-connection visibility, concurrency note).
 - [`docs/plans/PLAN_0.7.0.md`](docs/plans/PLAN_0.7.0.md) — the v0.7.0
   ethereal graphs (Active Storage-backed per-record named graphs).
+- [`docs/plans/PLAN_0.8.0.md`](docs/plans/PLAN_0.8.0.md) — RDF-star
+  (quoted triples + `annotate` DSL + `bulk_insert` row shape).
+- [`docs/plans/PLAN_0.9.0.md`](docs/plans/PLAN_0.9.0.md) — OWL 2 RL
+  reasoning (rule library + fixpoint iteration + `:derivedBy`
+  provenance).
+- [`docs/plans/PLAN_0.10.0.md`](docs/plans/PLAN_0.10.0.md) — SHACL
+  Core constraint validation.
+- [`docs/plans/PLAN_0.11.0.md`](docs/plans/PLAN_0.11.0.md) —
+  incremental reasoning + validation via DRed (Phase A:
+  `ChangeSet`; later phases gated on `:derivedFrom`).
+- [`docs/plans/PLAN_0.12.0.md`](docs/plans/PLAN_0.12.0.md) — SHACL
+  Rules (`sh:TripleRule` / `sh:SPARQLRule` shape-scoped
+  derivation).
+- [`docs/plans/PLAN_0.13.0.md`](docs/plans/PLAN_0.13.0.md) —
+  VV-driven consumer alignment (capability predicates +
+  N-Triples-star hydrate fix + Scope + `scope:` kwarg).
+- [`CONSUMER_REQUIREMENT_MM.md`](CONSUMER_REQUIREMENT_MM.md) — MM
+  substrate's consumption surface.
+- [`CONSUMER_REQUIREMENT_VV.md`](CONSUMER_REQUIREMENT_VV.md) —
+  vv-memory's consumption surface (Silver-tier ethereal graphs
+  + Conformer Writer).
 - [`vendor/sqlite-sparql/README.md`](../sqlite-sparql/README.md) — the
   Rust SQLite extension this gem wraps.
 - [`docs/research/Semantica.md`](../../docs/research/Semantica.md) — the
