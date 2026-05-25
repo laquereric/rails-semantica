@@ -19,12 +19,18 @@ than any single consumer.
 
 ```ruby
 # MM's Gemfile — local development (submodule checkout)
-gem "rails-semantica", path: "vendor/rails-semantica"
+gem "vv-graph", path: "../vendor/vv-graph"
 
 # MM's Gemfile — CI / production (pinned SHA)
-# gem "rails-semantica", git: "https://github.com/laquereric/rails-semantica",
-#                       ref: "<sha>"
+# gem "vv-graph", git: "https://github.com/laquereric/vv-graph",
+#                 ref: "<sha>"
 ```
+
+> *Per MM PLAN_0_81_0 Phase A — the gem was renamed from
+> `rails-semantica` to `vv-graph` at v0.15.0; the Ruby namespace
+> also moved from `Semantica::*` to `Vv::Graph::*`. Pre-rename CR
+> revisions of this file referenced the old names; the substrate's
+> surface inventory below uses the new names exclusively.*
 
 MM's `Gemfile.lock` records the exact rev in use. When an MM PR bumps the
 pin, the PR description references the upstream PR that motivated the bump.
@@ -387,3 +393,7 @@ commit hash for traceability.
 
 For questions about MM's consumption pattern, see MM's
 `docs/architecture/Vv::Graph.md` or open an issue on the MM repo.
+
+## Last reviewed
+
+2026-05-25 against MM substrate commit `e66aa9d` per `docs/plans/PLAN_0_91_0.md` (Phase A).

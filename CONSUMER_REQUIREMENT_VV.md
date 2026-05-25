@@ -8,6 +8,15 @@ against a written consumer expectation — **drift** between this file
 and the gem's actual behaviour signals work that needs to land in
 both repos lockstep.
 
+> **Naming history (PLAN_0_82_0 / PLAN_0_91_0).** This file was
+> originally authored against `rails-semantica`. The gem was renamed
+> to `vv-graph` at v0.15.0; the Ruby namespace moved from
+> `Semantica::*` to `Vv::Graph::*`. The `~> 0.7` pin in the code
+> sample below dates from before the rename; `vv-graph` has no 0.7.x
+> series. Reconciling the pin against the current `vv-graph` v0.15.0
+> is tracked in `vendor/vv-memory/vv-memory.gemspec`'s drift list,
+> not in this refresh.
+
 This is VV's perspective, not the upstream spec. MM (the substrate)
 keeps its own `CONSUMER_REQUIREMENT_MM.md`; the two are intentionally
 separate because the consumption shapes differ. MM uses `Storable` +
@@ -25,7 +34,7 @@ different speeds.
 
 ```ruby
 # vv-memory/vv-memory.gemspec
-spec.add_dependency "rails-semantica", "~> 0.7"
+spec.add_dependency "vv-graph", "~> 0.7"
 ```
 
 The pin is intentionally **tight** at the major-zero level. VV is
@@ -143,7 +152,7 @@ VV's expectations on each:
   forthcoming Conformer Writer) destructure `:ok`, the payload key
   (`:results` / `:value` / `:ntriples` / `:count`), `:reason`, and
   `:because` only.
-- **`:reason:` symbol vocabulary is pinned at the rails-semantica
+- **`:reason:` symbol vocabulary is pinned at the vv-graph
   contract level.** VV consumes `:sparql_parse_error`,
   `:sparql_eval_error`, `:invalid_graph`, `:invalid_dsl`,
   `:extension_not_loaded`, `:ar_connection_error`, `:unexpected_error`.
@@ -165,34 +174,33 @@ indirect dependency matters because the bulk_insert raw-mode contract
 gates whether N-Triples-star content survives the round-trip (see
 boundary item B1 below).
 
-## Predicate-shaped capability advertisements (encouraged)
+## Predicate-shaped capability advertisements
 
-VV would benefit from `vv-graph` exposing more capability
-predicates. The existing one VV needs:
+All three predicates VV asked for shipped in PLAN_0.13.0 Phase A
+(`lib/vv/graph/capabilities.rb`); the surface is preserved
+through the v0.15.0 rename:
 
-- **`Vv::Graph.rdf_star_writes_enabled? → Boolean`** — pinned in
-  PLAN_0.8.0 Phase E. Not yet implemented at the time of writing
-  (rails-semantica 0.7.0). VV's `Vv::Memory.rdf_star_writes_enabled?`
-  delegates if defined, otherwise falls back to
-  `defined?(::Vv::Graph::EtherealGraph)` — adequate under the P1
-  pin posture, but the upstream predicate is the source of truth
-  once 0.8.0 ships.
+- **`Vv::Graph.rdf_star_writes_enabled? → Boolean`** — currently
+  `false` (introspection probe on `Sparql.respond_to?(:quoted_triple)`).
+  Flips to `true` automatically when PLAN_0.8.0 Phase B lands the
+  `Sparql.quoted_triple` + `Storable::DSL annotate` surface (still
+  pending, see B2). VV's `Vv::Memory.rdf_star_writes_enabled?`
+  delegates to this when defined, with a `defined?(::Vv::Graph::EtherealGraph)`
+  fallback for safety.
+- **`Vv::Graph.checkpoint_can_round_trip?(content_kind:)`** —
+  accepts `:plain_ntriples` / `:ntriples_star` (per
+  `Vv::Graph::CHECKPOINT_CONTENT_KINDS`); both return `true` as of
+  v0.13.0 (the `:ntriples_star` branch flipped on with the B1 fix
+  above, by introspection over the tokenizer). VV's hydrate spec
+  un-pends as soon as this predicate answers `true`.
+- **`Vv::Graph.facade_version → String`** — capability epoch
+  independent of `VERSION`. Currently identical to `VERSION`; the
+  two diverge only when a release ships pure bugfixes without
+  adding capabilities. Consumers compare via `Gem::Version`.
 
-Predicates VV would consume if they existed:
-
-- `Vv::Graph.checkpoint_can_round_trip?(content_kind:)` —
-  `:plain_ntriples` / `:ntriples_star`. The honest answer for
-  `vv-graph` 0.7.0 is `true` / `false` respectively (see
-  boundary item B1). Letting VV ask the question rather than infer
-  from gem version would mean VV's hydrate-blocking spec can
-  un-pend automatically when upstream answers `true`.
-- `Vv::Graph.facade_version → String` — capability epoch independent
-  of `VERSION`. Lets VV reason about "is the `annotate` DSL
-  reachable" without parsing the gem's gemspec.
-
-The general principle: **VV would rather call a predicate than
-introspect a version.** Predicates are testable, version strings
-are not.
+The general principle stands: **VV would rather call a predicate
+than introspect a version.** Predicates are testable, version
+strings are not.
 
 ## Boundary items — open requests back to `vv-graph`
 
@@ -202,58 +210,43 @@ two-sided commitment.
 
 ### B1 — `EtherealGraph.parse_ntriples` must round-trip N-Triples-star
 
-**Severity: load-bearing. Status: scoped upstream 2026-05-24, implementation pending.**
+**Severity: load-bearing. Status: ✅ shipped (PLAN_0.13.0 Phase B, v0.13.0).**
 
-**Problem (original framing).** The Conformer in VV's PLAN_0.2.0
-writes RDF-star annotations into per-scope named graphs through
+**Original framing.** The Conformer in VV's PLAN_0.2.0 writes
+RDF-star annotations into per-scope named graphs through
 `Sparql.execute`. Writes ✓, reads ✓, checkpoint-to-blob ✓.
-**Re-hydrate ✗** — the blob round-trip drops every line
-containing `<<>>`, because `parse_ntriples`
-(`lib/semantica/ethereal_graph.rb:235`) per-lines through
-`Sparql.split_ntriple` (whitespace-tokenizing), which sees `<<`
-as two separate `<` tokens.
+**Re-hydrate ✗** under the pre-fix tokenizer — the blob round-trip
+dropped every line containing `<<>>`, because `parse_ntriples`
+per-lined through `Sparql.split_ntriple` (whitespace-tokenizing),
+which saw `<<` as two separate `<` tokens.
 
-**Net P1 envelope under rails-semantica 0.7.0:** scopes carrying
-Conformer-produced annotations cannot survive an evict +
-re-hydrate cycle. VV documents this as an operator-facing
-constraint in v0.2.0's README, but the constraint is awkward; it
-makes Silver effectively non-portable across process restarts
-when star content is present.
+**Resolution.** Route 2 from VV's suggested fixes landed in
+PLAN_0.13.0 Phase B (shipped in v0.13.0; surface preserved
+verbatim through the v0.15.0 rename):
 
-**Upstream response (2026-05-24).** `vv-graph` rewrote
-PLAN_0.13.0 same-day to scope the fix as part of its expanded
-"VV-driven consumer alignment + Scope" framing. Implementation
-is pending in that plan. VV's regression spec
+- `Vv::Graph::Sparql.split_ntriple` (`lib/vv/graph/sparql.rb:730`) +
+  `take_quoted_triple_term` (`lib/vv/graph/sparql.rb:795`) recognise
+  `<< s p o >>` as a single token via balanced-bracket counting
+  (nesting supported).
+- `Vv::Graph::EtherealGraph.parse_ntriples`
+  (`lib/vv/graph/ethereal_graph.rb:237`) +
+  `strip_brackets_` (`lib/vv/graph/ethereal_graph.rb:255`) pass
+  quoted-triple terms through to `bulk_insert(raw: true)`
+  without bracket-stripping; the engine's `rdf_insert_many`
+  (sqlite-sparql 0.7.0+) accepts them in subject and object
+  position.
+- `Vv::Graph.checkpoint_can_round_trip?(content_kind: :ntriples_star)`
+  (`lib/vv/graph/capabilities.rb:57`) now returns `true` by
+  introspection — VV consumers should branch on this predicate
+  rather than the gem version.
+
+**VV-side follow-up.** VV's regression spec
 (`vendor/vv-memory/spec/vv/memory/silver_star_passthrough_spec.rb`'s
-hydrate / checkpoint / evict / re-hydrate example) is marked
-`pending` with a verbatim upstream pointer and **un-pends
-automatically when the fix lands**. No further upstream push
-required from VV's side; the next move belongs to the
-PLAN_0.13.0 implementation.
-
-**Suggested-fix routes that informed the upstream scoping:**
-
-1. Delegate `parse_ntriples` to the engine's `rdf_load_ntriples`
-   scalar — `sqlite-sparql` 0.7.0 added N-Triples-star support
-   there. This trades a Ruby-side parser for an FFI roundtrip per
-   blob, which is a wash given hydrate already pays an
-   `each_slice(HYDRATION_BATCH_SIZE).bulk_insert` cost.
-2. Teach the existing per-line parser to recognize `<<...>>`
-   grouping and emit the line verbatim to `bulk_insert(raw: true)`,
-   which then dispatches `rdf_insert_many` — `sqlite-sparql` 0.7.0
-   accepts quoted-triple terms in the `_many` form.
-
-Either route satisfies VV's regression. Choice is upstream's
-to make; VV's contract is on the *behaviour* (hydrate round-trip
-of N-Triples-star content), not the implementation.
-
-**Downstream implication.** VV's `docs/plans/PLAN_0.3.0.md`
-(Gold tier + Curator) lists this fix as a **hard prerequisite**.
-The Gold `gold:facts` graph is annotation-heavy and cannot
-survive evict without the fix. The dependency chain is:
-`vv-graph` PLAN_0.13.0 (B1 fix) → `vv-memory` PLAN_0.2.0
-Phase D integration spec (un-pends) → `vv-memory` PLAN_0.3.0
-implementation start.
+hydrate / checkpoint / evict / re-hydrate example) was marked
+`pending` with a verbatim upstream pointer; it should now
+un-pend on the next `bin/check` run. The acceptance signal
+unblocks vv-memory PLAN_0.3.0 (Gold tier + Curator) per the
+original dependency chain.
 
 ### B2 — `annotate` DSL and `Sparql.quoted_triple` marker (PLAN_0.8.0 Phase B)
 
@@ -296,19 +289,24 @@ this boundary item.
 
 ### B4 — PLAN_0.14.0 Path A (`Vv::Graph::Decision`) is in the wrong layer
 
-**Severity: layering correction. Status: filed 2026-05-25, awaiting upstream re-frame.**
+**Severity: layering correction. Status: ✅ closed (upstream reframed PLAN_0.14.0 to `Vv::Graph::Storage`).**
 
-`vv-graph`'s draft PLAN_0.14.0 surveys the upstream Python
-project [`semantica-agi/semantica`][upstream-decisions] and
-recommends **Path A** — a `Vv::Graph::Decision` concern with
-verb-shaped methods (`record_decision`, `trace_decision_chain`,
-`find_similar_decisions`, `analyze_decision_impact`,
-`check_decision_rules`) implemented as a Storable extension. The
-implementation draft PLAN_0.14.1 builds on it.
+**Resolution.** `vv-graph`'s `docs/plans/PLAN_0.14.0.md` is now
+**`Vv::Graph::Storage` — configurable graph storage via Active
+Storage** (snapshot / restore named graphs to S3 or local disk
+via a manifest format pinned at v0.14.0). The Path A
+(`Vv::Graph::Decision` concern with `record_decision` /
+`trace_decision_chain` / etc.) framing was dropped from the
+plan; PLAN_0.14.1 was likewise reframed off Path A. VV's
+layering correction below stands as the architectural record
+that informed the reframe; the active gem direction no longer
+conflicts with it.
+
+The original VV critique, preserved for traceability:
 
 [upstream-decisions]: https://github.com/semantica-agi/semantica
 
-**VV's response: Path A does not belong in `vv-graph`.**
+**VV's response (original framing): Path A did not belong in `vv-graph`.**
 
 The architectural reason — articulated in
 `vendor/../docs/research/DecisionLayer.md` in the substrate
@@ -363,7 +361,7 @@ side); they should not be moved into `vv-graph`'s plans
 directory in their current form because their content commits
 to Path A. If/when the maintainer re-frames PLAN_0.14.0 to
 endorse Path B or Path C without Path A, the re-framed plan
-belongs in `rails-semantica/docs/plans/PLAN_0.14.0.md` and is
+belongs in `vv-graph/docs/plans/PLAN_0.14.0.md` and is
 welcome.
 
 **Downstream implication.** vv-memory's PLAN_0.2.0 Conformer
@@ -426,7 +424,7 @@ substrate (`vv-graph`) that it offers its own consumers.
 ## Versioning expectation
 
 While `vv-graph` is v0.x.x, VV tracks the path-sourced rev
-directly via the `~> 0.7` pin. At rails-semantica v1.0 the surfaces
+directly via the `~> 0.7` pin. At vv-graph v1.0 the surfaces
 above are pinned by semver. VV will move from `~> 0.7` / `>= 0.8`
 era pins to the standard `~> 1.x` pattern at that point.
 
@@ -461,3 +459,7 @@ commit that updates this file's relevant section in the same patch.
 VV maintainers — file an issue in the MM parent repo with the
 `vv-memory` label, or open the PR directly against
 `vendor/vv-memory/` in the substrate monorepo.
+
+## Last reviewed
+
+2026-05-25 against MM substrate commit `e66aa9d` per `docs/plans/PLAN_0_91_0.md` (Phase A).
