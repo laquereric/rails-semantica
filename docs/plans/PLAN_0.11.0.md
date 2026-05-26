@@ -38,7 +38,7 @@ the implementation lands.
 | MM-side incremental research note | MM repo | **TBD** — companion to `magentic-market-ai/docs/research/StarExts.md`. Open questions: where does change-set capture wrap the AR write boundary? Is the Conformer's "extract triples from new episode" a natural change-set boundary? |
 | `CONSUMER_REQUIREMENT_MM.md` | this repo | Drift target. v0.11.0 adds the incremental surface block once MM signals adoption. |
 
-## Engine prerequisites (sqlite-sparql ≥ 0.8.0) — **already satisfied**
+## Engine prerequisites (sqlite-sparql ≥ 0.9.1) — **already satisfied**
 
 **No new engine surface.** DRed's two phases are both expressible in
 SPARQL UPDATE:
@@ -419,7 +419,7 @@ small-enough that the incremental overhead isn't worth it.
   Phase C + the equivalence pin.
 - New file `spec/semantica/storable_incremental_save_spec.rb`
   covering Phase D + E.
-- `bin/check` green against engine ≥ 0.8.0 (no new pin — DRed
+- `bin/check` green against engine ≥ 0.9.1 (no new pin — DRed
   rides the existing `sparql_update` + RDF-star surfaces).
 
 ### Phase G — Docs
@@ -506,7 +506,7 @@ small-enough that the incremental overhead isn't worth it.
 1. Phases A/B/C/D/E land with passing specs.
 2. Equivalence pin (full-pass-vs-incremental) green for both
    reasoner and validator.
-3. `bin/check` green against engine ≥ 0.8.0.
+3. `bin/check` green against engine ≥ 0.9.1.
 4. CHANGELOG `0.11.0` heading drops `(unreleased)`.
 5. `VERSION` → `0.11.0`.
 6. README documents `ChangeSet.capture`, the
@@ -559,5 +559,5 @@ small-enough that the incremental overhead isn't worth it.
   incrementally* — the algorithm v0.11.0 implements.
 - RDFox / differential dataflow literature — the
   out-of-scope-for-now next horizon if DRed proves insufficient.
-- `sqlite-sparql/CHANGELOG.md` § `0.8.0` — engine pin v0.11.0
-  inherits from v0.8.0 / v0.9.0 / v0.10.0.
+- `sqlite-sparql/CHANGELOG.md` § `0.9.1` — engine pin v0.11.0
+  inherits from v0.8.0 / v0.9.1 / v0.10.0.

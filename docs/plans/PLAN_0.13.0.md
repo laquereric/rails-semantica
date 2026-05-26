@@ -35,7 +35,7 @@ v0.7.0 surfaces VV pins.
 | `CONSUMER_REQUIREMENT_MM.md` | this repo | Sibling consumer requirement file. MM consumes `Storable + Sparql.execute`; VV consumes `EtherealGraph + Sparql.execute`. The two intentionally evolve separately. |
 | W3C SPARQL 1.1 §13 (RDF Dataset) | spec | The dataset model the Scope value object names. v0.13.0 doesn't introduce new semantics — it ergonomically wraps what SPARQL already supports. |
 
-## Engine prerequisites (sqlite-sparql ≥ 0.8.0) — **already satisfied**
+## Engine prerequisites (sqlite-sparql ≥ 0.9.1) — **already satisfied**
 
 **No new engine surface.** B1's hydrate fix routes through
 `rdf_load_ntriples` (engine 0.7.0, with N-Triples-star support) or
@@ -289,7 +289,7 @@ with `:scope_read_write_overlap` when present.
   contract-pin and `Scope.from_` examples.
 - Phase D: `spec/semantica/scope_kwarg_facade_spec.rb` covers
   all four facades' `scope:` acceptance + refusals.
-- `bin/check` green against engine ≥ 0.8.0.
+- `bin/check` green against engine ≥ 0.9.1.
 
 ### Phase F — Docs + cross-references
 
@@ -365,7 +365,7 @@ with `:scope_read_write_overlap` when present.
 ## Acceptance signal
 
 1. Phases A/B/C/D land with passing specs.
-2. `bin/check` green against engine ≥ 0.8.0.
+2. `bin/check` green against engine ≥ 0.9.1.
 3. CONSUMER_REQUIREMENT_VV.md B1 graduates from "Severity:
    load-bearing" to "Landed in 0.13.0".
 4. CONSUMER_REQUIREMENT_VV.md B3 graduates from "Severity:
@@ -417,6 +417,6 @@ with `:scope_read_write_overlap` when present.
 - `CONSUMER_REQUIREMENT_MM.md` — sibling consumer signal; MM
   doesn't yet ask for Scope, but the surface is available if MM
   ever signals demand.
-- `sqlite-sparql/CHANGELOG.md` § `0.7.0` — engine prereq for
+- `sqlite-sparql/CHANGELOG.md` § `0.9.1` — engine prereq for
   Phase B's bulk-insert path (already shipped). Engine pin
-  inherits from v0.8.0.
+  inherits from v0.7.0 / v0.8.0 / v0.9.1.

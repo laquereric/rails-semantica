@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+- **Engine floor bumped to `sqlite-sparql ≥ 0.9.1`.** No live gem
+  code changes — the Phase-B materialise loops in
+  `Vv::Graph::Reasoner` / `Vv::Graph::Shacl` /
+  `Vv::Graph::Shacl::Rules` stay on the per-rule `Sparql.execute`
+  path. Engine 0.9.1 ships `rdf_owl_rl_materialise` — a native
+  Rust OWL 2 RL fixpoint pass (15-rule subset matching
+  `Vv::Graph::Reasoner::Rules::OwlRl` exactly). Reasoner can opt
+  into it in a future phase; equivalence is pinned by the
+  engine's `test_rdf_owl_rl_materialise_equivalence_with_vg` test.
+  Plans PLAN_0.9.0 / PLAN_0.10.0 / PLAN_0.11.0 / PLAN_0.12.0 /
+  PLAN_0.13.0 / PLAN_0.14.0 all bump their `engine ≥ …` floor
+  docstring and the engine-CHANGELOG-section reference to 0.9.1.
+- **PLAN_0.9.0 (OWL 2 RL Reasoner) — native opt-in shape
+  documented.** Same "per-rule default + engine-native opt-in"
+  split PLAN_0.12.0 introduced when engine 0.8.0 shipped
+  `rdf_construct_many` for SHACL Rules. The OWL 2 RL Reasoner's
+  Phase B per-rule path stays the default; the
+  `rdf_owl_rl_materialise` route is opt-in pending telemetry.
+  Engine and gem produce byte-identical inferred graphs +
+  RDF-star annotations either way (engine defaults match
+  `Reasoner::Rules` convention by design).
+- **Engine v0.9.0 was the broken docs-only publication; v0.9.1
+  is the actual native-OWL-2-RL release.** Anyone who pinned
+  engine v0.9.0 directly should bump to v0.9.1 — v0.9.0 ships
+  only the `CONSUMER_REQUIREMENT_*.md` doc updates with no
+  `rdf_owl_rl_materialise` function exposed. See
+  `sqlite-sparql/docs/plans/PLAN_0.9.1.md` for the incident
+  write-up.
+
 ## 0.15.0 — 2026-05-25
 
 **Rename: `rails-semantica` → `vv-graph`.** Four pinned breaking

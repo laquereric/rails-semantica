@@ -50,7 +50,7 @@ change.
 | ActiveStorage docs (Rails 8) | external | Configured via `config/storage.yml` + `config.active_storage.service = :name`. Built-in Disk / Test / S3 / GCS / Azure services; operators-as-third-party services compose. |
 | W3C SPARQL 1.1 — graph enumeration | spec | `SELECT DISTINCT ?g WHERE { GRAPH ?g { ?s ?p ?o } }` — the engine surface `Storage.list_graphs_in_engine` drives. Oxigraph handles natively. |
 
-## Engine prerequisites (sqlite-sparql ≥ 0.8.0) — **already satisfied**
+## Engine prerequisites (sqlite-sparql ≥ 0.9.1) — **already satisfied**
 
 **No new engine surface.** Every operation rides existing facades:
 
@@ -626,7 +626,7 @@ Vv::Graph::Storage.prune
   engine-backed round-trip. Optional `:requires_disk` tag for
   Disk-service smoke tests; `:requires_s3` for opt-in S3 tests
   gated by env-var (`SEMANTICA_TEST_S3_BUCKET`).
-- `bin/check` green against engine ≥ 0.8.0.
+- `bin/check` green against engine ≥ 0.9.1.
 - Estimated total ~35–40 new specs; suite grows from 330+ → ~370.
 
 ### Phase G — Docs
@@ -743,7 +743,7 @@ posture lands.
 ## Acceptance signal
 
 1. Phases A/B/C/D/E land with passing specs.
-2. `bin/check` green against engine ≥ 0.8.0.
+2. `bin/check` green against engine ≥ 0.9.1.
 3. Active Storage `Test` service spec harness exercises every
    facade method.
 4. Disk-service smoke test (tagged `:requires_disk`) round-trips

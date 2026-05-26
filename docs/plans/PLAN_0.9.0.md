@@ -36,30 +36,62 @@ the plan can land in parallel so the substrate-side consumer
 | MM-side reasoner research note | MM repo | **TBD** — companion to `magentic-market-ai/docs/research/StarExts.md`. v0.9.0's gotchas / scope decisions should land in an MM-side primer the way v0.8.0's did. Open question for MM: where does the reasoner subagent live, and what does it call into? |
 | `CONSUMER_REQUIREMENT_MM.md` | this repo | Drift target. v0.9.0 adds `Semantica::Reasoner` surface block once MM signals adoption. |
 
-## Engine prerequisites (sqlite-sparql ≥ 0.8.0) — **already satisfied**
+## Engine prerequisites (sqlite-sparql ≥ 0.9.1) — **already satisfied**
 
-**No new engine surface.** Every OWL 2 RL rule is a SPARQL UPDATE
-form (`INSERT { … } WHERE { … }`) that already routes through
-`sparql_update` (PLAN_0.3.0). RDF-star annotations on inferred
-triples ride the v0.8.0 surface. Named-graph scoping for the
-materialised closure rides PLAN_0.5.0.
+Every OWL 2 RL rule is a SPARQL UPDATE form (`INSERT { … } WHERE
+{ … }`) that already routes through `sparql_update` (PLAN_0.3.0).
+RDF-star annotations on inferred triples ride the v0.8.0 surface.
+Named-graph scoping for the materialised closure rides PLAN_0.5.0.
 
-If the rule set later proves too slow at OWL-2-RL-by-SPARQL-UPDATE
-speeds, two engine-level options would unlock further work — both
-deferred and out of scope for v0.9.0:
+### Per-rule vs. native (engine-side) execution
 
-1. **Engine-side rule application.** Move the rule set into a Rust
-   pass that walks the Oxigraph store directly, skipping the
-   SPARQL parser per rule. Order-of-magnitude faster on large
-   closures.
-2. **Differential/incremental reasoning.** Maintain a delta-based
-   inference index so adding a triple recomputes only the
-   affected closure slice. Substantial engine work; ABox-only
-   forward-chaining over OWL 2 RL doesn't need it for the sizes
-   MM is likely to hit.
+Two implementation shapes are live as of engine v0.9.1; pick at
+Phase B time:
 
-v0.9.0 ships the SPARQL-UPDATE-driven shape; v0.10.0+ is the
-horizon for either of the above.
+1. **Per-rule (default — ships in v0.9.0 Phase B).** `materialise!`
+   iterates rules and issues one `Sparql.execute` per rule per
+   fixpoint iteration. N rules × M iterations = N×M FFI crossings
+   + N×M SQL parses + N×M SPARQL parses. Simplest to reason
+   about; honest about cost; the natural shape for small rule
+   sets (the 15-rule `Rules::OwlRl` library).
+
+2. **Native engine pass (opt-in, engine v0.9.1).** `materialise!`
+   delegates to `Sparql.execute("SELECT rdf_owl_rl_materialise(?, ?, ?)")`
+   — one FFI crossing per materialise call. The engine walks
+   the Oxigraph store directly per rule, skipping the SPARQL
+   parser per rule. Engine-side rule coverage matches gem-side
+   `Rules::OwlRl` exactly (the engine equivalence test pins
+   this), so both paths produce identical inferred graphs. The
+   engine emits the same `:derivedBy <urn:semantica:rule:scm-sco> ;
+   :derivedAt …` RDF-star annotations the gem does (engine
+   defaults match VG's convention; overridable via the
+   options-JSON if needed).
+
+The two paths produce identical asserted graphs + identical
+RDF-star annotations — the equivalence is pinned by the engine's
+`test_rdf_owl_rl_materialise_equivalence_with_vg` test and
+mirror-pinned by a planned gem-side cross-path spec.
+
+Phase B ships the per-rule path; a later phase (gated on
+telemetry from MM) adds the native opt-in. The engine surface is
+ready today; gem-side adoption waits for a concrete bottleneck
+signal per VG's posture on the engine's "Requested extensions"
+section.
+
+If MM-side telemetry someday shows the native pass isn't enough
+(e.g., a multi-million-triple closure needs incremental
+recomputation), a further engine-level horizon is still on the
+table:
+
+- **Differential/incremental reasoning.** Maintain a delta-based
+  inference index so adding a triple recomputes only the
+  affected closure slice. Substantial engine work
+  (PLAN_0.12.0-equivalent on the engine side, plus more). ABox-
+  only forward-chaining over OWL 2 RL doesn't need it for the
+  sizes MM is likely to hit; revive when telemetry says
+  otherwise. The engine CR (`sqlite-sparql/CONSUMER_REQUIREMENT_VvGraph.md`
+  item #10) names this as "genuinely out-of-reach for incremental
+  engine work" — engine-side substrate is missing.
 
 ## Why OWL 2 RL (and not full OWL DL)
 
@@ -369,7 +401,7 @@ asserted triples that triggered it.
   Phase C.
 - Extend `spec/semantica/sparql_star_spec.rb` (or sibling)
   with the provenance shape from Phase E.
-- `bin/check` green against engine ≥ 0.8.0 (no new engine
+- `bin/check` green against engine ≥ 0.9.1 (no new engine
   pin — OWL 2 RL rides on the existing surfaces).
 
 ### Phase G — Docs
@@ -448,7 +480,7 @@ asserted triples that triggered it.
 ## Acceptance signal
 
 1. Phases A/B/C/D/E land with passing specs.
-2. `bin/check` green against engine ≥ 0.8.0.
+2. `bin/check` green against engine ≥ 0.9.1.
 3. CHANGELOG `0.9.0` heading drops `(unreleased)`.
 4. `VERSION` → `0.9.0`.
 5. README documents the `ontology do … end` block + the
@@ -492,5 +524,8 @@ asserted triples that triggered it.
   v0.9.0's rule library transcribes.
 - W3C OWL 2 RL/RDF rules table <https://www.w3.org/TR/owl2-profiles/#Reasoning_in_OWL_2_RL_and_RDF_Graphs_using_Rules>
   — the exact rule set `Rules::OwlRl` implements.
-- `sqlite-sparql/CHANGELOG.md` § `0.8.0` — engine pin v0.9.0
-  inherits from v0.8.0.
+- `sqlite-sparql/CHANGELOG.md` § `0.9.1` — engine pin v0.9.0
+  inherits from v0.8.0. (v0.9.0 was the broken docs-only
+  publication; v0.9.1 is the actual native-OWL-2-RL release
+  Vv::Graph::Reasoner could opt into — see the "Engine-side
+  native pass available" note below.)

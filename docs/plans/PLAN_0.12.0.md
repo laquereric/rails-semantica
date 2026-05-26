@@ -39,7 +39,7 @@ either.
 | MM-side derivation research note | MM repo | **TBD.** Open question for MM: which derivations are "ontological" (OWL 2 RL) and which are "business-logic" (SHACL Rules)? A companion note in `magentic-market-ai/docs/research/` should walk the dividing line. |
 | `CONSUMER_REQUIREMENT_MM.md` | this repo | Drift target. v0.12.0 adds the SHACL Rules surface block once MM signals adoption. |
 
-## Engine prerequisites (sqlite-sparql ≥ 0.8.0) — **already satisfied**
+## Engine prerequisites (sqlite-sparql ≥ 0.9.1) — **already satisfied**
 
 `sh:TripleRule` expands to an `INSERT { ?focus <p> ?o } WHERE
 { … }` form already routed through `sparql_update` (PLAN_0.3.0).
@@ -440,7 +440,7 @@ end
 - W3C SHACL-AF test suite's rules slice — every test case
   exercising `sh:TripleRule` or `sh:SPARQLRule` (excluding
   the JS / NodeExpression cases) passes.
-- `bin/check` green against engine ≥ 0.8.0 (no new pin — SHACL
+- `bin/check` green against engine ≥ 0.9.1 (no new pin — SHACL
   Rules rides the existing surfaces).
 
 ### Phase G — Docs
@@ -523,7 +523,7 @@ end
    green.
 3. Cross-surface composition spec (OWL 2 RL → SHACL Rules)
    green.
-4. `bin/check` green against engine ≥ 0.8.0.
+4. `bin/check` green against engine ≥ 0.9.1.
 5. CHANGELOG `0.12.0` heading drops `(unreleased)`.
 6. `VERSION` → `0.12.0`.
 7. README documents the `triple_rule` + `sparql_rule` DSL,
@@ -581,7 +581,7 @@ end
   — the integration safety net for Phase B + Phase F.
 - DRed (Gupta, Mumick, Subrahmanian 1993) — incremental
   Datalog over the unified dependency graph.
-- `sqlite-sparql/CHANGELOG.md` § `0.8.0` — engine pin v0.12.0
-  inherits from v0.8.0 / v0.9.0 / v0.10.0 / v0.11.0. The 0.8.0
-  release lands `rdf_construct_many` — the batched-execution
+- `sqlite-sparql/CHANGELOG.md` § `0.9.1` — engine pin v0.12.0
+  inherits from v0.8.0 / v0.9.1 / v0.10.0 / v0.11.0. The 0.8.0
+  release landed `rdf_construct_many` — the batched-execution
   surface v0.12.0's opt-in shape rides on.
