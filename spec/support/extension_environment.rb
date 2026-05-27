@@ -32,8 +32,19 @@ module Vv::Graph
         # examples (not just hygiene); parallel test workers (e.g.
         # rspec-parallel) will clobber each other's stores. Run gem
         # specs serially.
+        #
+        # Ensures the extension is loaded on the current AR
+        # connection before calling rdf_clear — without this guard,
+        # specs that create AR connections in their own before(:all)
+        # hooks (or any test ordering that causes AR to check out a
+        # fresh connection between example files) hit "no such
+        # function: rdf_clear" on the first :requires_extension
+        # spec in the new connection's lifecycle. The Loader uses
+        # a sentinel probe + skip so the call is a no-op when the
+        # extension is already loaded.
         def reset_store!
           return unless available?
+          ::Vv::Graph::Loader.ensure_extension_loaded!
           ::ActiveRecord::Base.connection.execute("SELECT rdf_clear()")
         end
 
