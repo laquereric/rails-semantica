@@ -480,20 +480,26 @@ module Vv::Graph
         insert_block = m[1].strip
         where_block  = m[2].strip
 
-        # PLAN_0.9.0 Phase E (cut 1) — append provenance
-        # annotations to the INSERT block. For each derived triple
-        # pattern in the original INSERT, emit
-        # `<< s p o >> <derivedBy> <rule_iri>`. Engine dedupes
-        # constant annotation triples → idempotent across reruns.
+        # PLAN_0.9.0 Phase E annotations on the INSERT block:
         #
-        # `:derivedAt NOW()` + `:derivedFrom << premise >>` are
-        # documented Phase E.1 work: timestamps break read-replace
-        # idempotency without a FILTER NOT EXISTS guard, and
-        # premise references need explicit variable-position
-        # bookkeeping per rule. Cut 1 lands `:derivedBy` only —
-        # enough for rule-attribution queries against the closure.
+        # Cut 1 (shipped earlier): for each derived triple, emit
+        #   << s p o >> <derivedBy> <rule_iri> .
+        # Idempotent against re-runs (RDF set semantics dedupe).
+        #
+        # Cut 2 / Phase E.1 (PLAN_0.11.0 Phase B prerequisite): for
+        # each derived triple, also emit one
+        #   << derived >> <derivedFrom> << premise >>
+        # annotation per WHERE-block premise. Lets DRed's over-delete
+        # pass identify the inferred slice supported by a retracted
+        # asserted triple without re-running the rule. The premise
+        # set is the rule's BGP — FILTER clauses are skipped (they
+        # constrain but don't supply data).
+        #
+        # `:derivedAt NOW()` annotations stay deferred — NOW() breaks
+        # read-replace idempotency and the DRed cycle doesn't need
+        # timestamps to function. Revive on first ask.
         if provenance
-          insert_block = build_insert_block_with_provenance(rule, insert_block)
+          insert_block = build_insert_block_with_provenance(rule, insert_block, where_block)
         end
 
         <<~SPARQL
@@ -506,29 +512,28 @@ module Vv::Graph
         SPARQL
       end
 
-      # PLAN_0.9.0 Phase E (cut 1) — split the rule's INSERT block
-      # into individual triple patterns (separated by `.`), then
-      # append one `<< pattern >> <derivedBy> <rule_iri>` per
-      # parent. Handles multi-triple INSERTs (scm-eqc1 /
-      # scm-eqp1) — each derived triple gets its own annotation.
-      def build_insert_block_with_provenance(rule, insert_block)
-        # Each triple pattern terminates on `.` not inside `<...>`,
-        # `"..."`, or `<<...>>`. The rules library uses only ground
-        # IRIs / variable refs / `rdfs:Foo` shorthand, so a simple
-        # split on `.` between balanced contexts is sufficient.
-        patterns = split_triple_patterns(insert_block)
+      # PLAN_0.9.0 Phase E — append provenance annotations to the
+      # INSERT block. Each derived triple gets:
+      #   << derived >> <derivedBy>   <rule_iri> .                  (cut 1)
+      #   << derived >> <derivedFrom> << premise_i >> .             (cut 2, per-premise)
+      #
+      # Multi-triple INSERTs (scm-eqc1 / scm-eqp1) get one
+      # annotation set per derived triple. The premises come from
+      # the rule's WHERE BGP — FILTER clauses are skipped.
+      def build_insert_block_with_provenance(rule, insert_block, where_block)
+        derived_patterns = split_triple_patterns(insert_block)
+        premise_patterns = extract_premise_patterns(where_block)
         rule_iri_term = "<#{::Vv::Graph::Reasoner.rule_iri(rule.id)}>"
 
-        annotated =
-          patterns.map do |pat|
-            "<< #{pat} >> <#{PROV_DERIVED_BY}> #{rule_iri_term} ."
+        annotations = []
+        derived_patterns.each do |derived|
+          annotations << "<< #{derived} >> <#{PROV_DERIVED_BY}> #{rule_iri_term} ."
+          premise_patterns.each do |premise|
+            annotations << "<< #{derived} >> <#{PROV_DERIVED_FROM}> << #{premise} >> ."
           end
-
-        # The rule's original parent triples + the per-parent
-        # annotation triples, joined by ` . ` for readability.
-        ([patterns.map { |p| "#{p} ." } + annotated]).join.then do |_|
-          (patterns.map { |p| "#{p} ." } + annotated).join("\n  ")
         end
+
+        (derived_patterns.map { |p| "#{p} ." } + annotations).join("\n  ")
       end
 
       # Tokenize an INSERT block into individual triple patterns.
@@ -538,6 +543,18 @@ module Vv::Graph
         # Each result is one triple pattern. We then re-strip and
         # discard empties.
         insert_block.split(/\.\s*(?=\S|$)/).map(&:strip).reject(&:empty?)
+      end
+
+      # Parse the WHERE block into a list of BGP triple patterns
+      # — strip FILTER(...) clauses (and any other non-BGP form),
+      # then split the remainder on `.` as we do for INSERT.
+      #
+      # OWL 2 RL rules in the curated library use only BGP +
+      # FILTER; extensions that introduce OPTIONAL / UNION / BIND
+      # need to also be stripped here. Today they don't exist.
+      def extract_premise_patterns(where_block)
+        stripped = where_block.gsub(/FILTER\s*\(((?:[^()]|\([^()]*\))+)\)/i, " ")
+        split_triple_patterns(stripped)
       end
 
       def refused(reason, because)
