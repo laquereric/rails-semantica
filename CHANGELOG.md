@@ -1,5 +1,55 @@
 # Changelog
 
+## Unreleased
+
+- **PLAN_0.11.0 Phase B — `Vv::Graph::Reasoner.materialise_incremental!`
+  (DRed over RDF-star `:derivedFrom` annotations).** Incremental
+  sibling to `materialise!`. Phase 1 over-deletes inferred quads
+  whose `:derivedFrom` annotation references a retracted asserted
+  triple, iterating to fixpoint as transitively-derived quads
+  themselves become "retracted premises." Phase 2 re-runs the
+  per-rule fixpoint to converge. Closure equivalence preserved by
+  OWL 2 RL's monotonicity.
+
+  Envelope: `{ ok:, over_deleted:, over_deleted_via_index:,
+  over_deleted_via_sparql:, rederived:, net_derived:, iterations:,
+  fixpoint:, index_dirty: }`. Pinned refusal symbols:
+  `:changeset_scope_mismatch_for_reasoner`,
+  `:dependency_index_unavailable`, `:full_rebuild_required`,
+  `:non_monotonic_rule_set`.
+
+  `dependency_index: :sparql` (default) routes through the
+  `:derivedFrom` annotation walk. `:native` and `:auto` are
+  accepted but fall back to `:sparql` and flag
+  `index_dirty: true` — engine v0.12.0's `rdf_dred_overdelete`
+  surface ships, but its asserted-graph contract under the gem's
+  per-rule materialise output needs further investigation before
+  the native cascade composes transparently. Documented as
+  deferred; revisit on the next engine release cycle.
+
+  `Vv::Graph::Reasoner.dred!` is a thin alias matching engine
+  v0.12.0's naming.
+
+  Built on PLAN_0.9.0 Phase E.1's per-premise annotations
+  (shipped in the same window).
+
+- **PLAN_0.9.0 Phase E.1 — `:derivedFrom << premise >>` RDF-star
+  annotations on every derived triple.** Extends the `:derivedBy`
+  cut (Phase E cut 1) with one `:derivedFrom` annotation per
+  WHERE-block triple pattern, parsed out of each rule's BGP
+  (FILTER clauses skipped). Multi-triple INSERTs get one
+  annotation set per derived triple. Idempotent against
+  re-runs (RDF set semantics). The prerequisite for PLAN_0.11.0
+  Phase B's SPARQL-driven DRed over-delete.
+
+- **Fix `spec/support/extension_environment.rb` test pollution.**
+  `reset_store!` now calls `Loader.ensure_extension_loaded!`
+  before `rdf_clear()`. Drops the engine-loaded full-suite
+  failure count from 151 → 0 (test ordering caused AR pool
+  churn that left a fresh connection without the extension
+  loaded, breaking the per-each reset). `bin/check` is trustworthy
+  for the first time since multi-spec engine coverage landed.
+
 ## 0.17.0 — 2026-05-27
 
 - **PLAN_0.17.0 Phase D — QueryIR multi-sort + `Offset`.**

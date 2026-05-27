@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "set"
+
 module Vv; end
 
 module Vv::Graph
@@ -47,6 +49,11 @@ module Vv::Graph
     REASON_INVALID_DSL        = :invalid_dsl
     REASON_RULE_SET_UNKNOWN   = :rule_set_unknown
     REASON_REASONER_DIVERGED  = :reasoner_diverged
+    # PLAN_0.11.0 Phase B — DRed incremental
+    REASON_CHANGESET_SCOPE_MISMATCH     = :changeset_scope_mismatch_for_reasoner
+    REASON_DEPENDENCY_INDEX_UNAVAILABLE = :dependency_index_unavailable
+    REASON_FULL_REBUILD_REQUIRED        = :full_rebuild_required
+    REASON_NON_MONOTONIC_RULE_SET       = :non_monotonic_rule_set
 
     DEFAULT_MAX_ITERATIONS = 50
 
@@ -366,6 +373,103 @@ module Vv::Graph
       run_fixpoint(rule_set, asserted, inferred, provenance, max_iterations)
     end
 
+    # PLAN_0.11.0 Phase B — DRed (Delete-and-Rederive) incremental
+    # reasoner.
+    #
+    #   Vv::Graph::Reasoner.materialise_incremental!(
+    #     asserted: scope.data,
+    #     inferred: scope.inferred,
+    #     changes:  change_set,
+    #     dependency_index: :sparql,     # only mode in this cut; :native deferred
+    #     rules:    :owl_2_rl,
+    #     provenance: true,
+    #     max_iterations: 50,
+    #   )
+    #   # => { ok: true,
+    #   #      over_deleted: 47,                 # phase 1: inferred quads dropped
+    #   #      over_deleted_via_index:  0,       # native cascade (deferred path)
+    #   #      over_deleted_via_sparql: 47,      # SPARQL :derivedFrom walk
+    #   #      rederived:    52,                 # phase 2: re-fixpoint deltas
+    #   #      net_derived:  5,                  # net change vs. prior closure
+    #   #      iterations:   3,
+    #   #      fixpoint:     true,
+    #   #      index_dirty:  false }
+    #
+    # The over-delete phase walks the v0.9.0 Phase E.1 RDF-star
+    # `:derivedFrom` annotations the existing materialise! emits.
+    # For each retracted asserted triple, every inferred quad whose
+    # `:derivedFrom` annotation references it is dropped. The drop
+    # cascades — an over-deleted inferred quad may itself have been
+    # a premise for further inferred quads — until fixpoint.
+    #
+    # The re-derive phase re-runs the existing rule fixpoint
+    # (`run_fixpoint`) against the same asserted+inferred pair.
+    # OWL 2 RL is monotonic, so re-derivation cannot remove triples
+    # that survived over-deletion; the closure converges.
+    #
+    # `dependency_index: :sparql` is the only supported mode in
+    # this cut. The `:native` path through engine v0.12.0's
+    # `rdf_dred_overdelete` + `track_dependencies` is deferred
+    # pending an engine-call-shape investigation (the engine's
+    # `rdf_owl_rl_materialise` produces a different closure than
+    # the gem's per-rule path, so the two surfaces don't compose
+    # transparently yet). Passing `:native` or `:auto` falls back
+    # to `:sparql` and sets `index_dirty: true`.
+    def materialise_incremental!(asserted: nil, inferred: nil, scope: nil,
+                                 changes:,
+                                 rules: :owl_2_rl,
+                                 dependency_index: :sparql,
+                                 provenance: true,
+                                 max_iterations: DEFAULT_MAX_ITERATIONS)
+      resolved = ::Vv::Graph::Scope::FacadeAdapter.resolve(
+        scope: scope,
+        kwargs: { asserted: asserted, inferred: inferred },
+        mapping: REASONER_SCOPE_MAPPING,
+        required: REASONER_REQUIRED_ROLES,
+      )
+      return resolved unless resolved.is_a?(Hash) && resolved[:kwargs]
+      asserted = resolved[:kwargs][:asserted]
+      inferred = resolved[:kwargs][:inferred]
+
+      graph_error = validate_graphs(asserted, inferred)
+      return graph_error if graph_error
+
+      cs_check = validate_change_set(changes, asserted)
+      return cs_check if cs_check
+
+      rule_set = resolve_rules(rules)
+      return rule_set if rule_set.is_a?(Hash)
+
+      # Phase 1: over-delete via SPARQL :derivedFrom walk.
+      over_deleted_via_sparql = sparql_over_delete!(inferred, changes.retracted)
+      index_dirty = dependency_index != :sparql
+
+      # Phase 2: re-derive via the full per-rule fixpoint.
+      prev_size = ::Vv::Graph::Sparql.store_size(graph: inferred)[:count] || 0
+      rederive_env = run_fixpoint(rule_set, asserted, inferred, provenance, max_iterations)
+      return rederive_env.merge(over_deleted: over_deleted_via_sparql) unless rederive_env[:ok]
+      new_size = ::Vv::Graph::Sparql.store_size(graph: inferred)[:count] || 0
+
+      {
+        ok: true,
+        over_deleted:            over_deleted_via_sparql,
+        over_deleted_via_index:  0,
+        over_deleted_via_sparql: over_deleted_via_sparql,
+        rederived: rederive_env[:derived].to_i,
+        net_derived: new_size - prev_size,
+        iterations: rederive_env[:iterations].to_i,
+        fixpoint: rederive_env[:fixpoint] == true,
+        index_dirty: index_dirty,
+        per_rule: rederive_env[:per_rule] || {}
+      }
+    end
+
+    # Alias mirroring engine v0.12.0's rdf_dred_overdelete naming —
+    # operators who want the algorithm name at the call site.
+    def dred!(**kwargs)
+      materialise_incremental!(**kwargs)
+    end
+
     class << self
       private
 
@@ -559,6 +663,101 @@ module Vv::Graph
 
       def refused(reason, because)
         { ok: false, reason: reason, because: because.to_s }
+      end
+
+      # PLAN_0.11.0 Phase B — change-set sanity check before DRed.
+      # The change-set's scope (its `data` graph IRI) must match
+      # the `asserted:` we're about to over-delete-then-re-derive
+      # against; otherwise we'd silently apply DRed to the wrong
+      # slice.
+      def validate_change_set(changes, asserted)
+        unless changes.respond_to?(:retracted) && changes.respond_to?(:scope)
+          return refused(REASON_INVALID_DSL,
+                         "changes: must respond to #retracted + #scope; got #{changes.class}")
+        end
+
+        cs_data_graph = changes.scope&.respond_to?(:data) ? changes.scope.data : nil
+        return nil if cs_data_graph.nil? || asserted.nil? || cs_data_graph == asserted
+
+        refused(REASON_CHANGESET_SCOPE_MISMATCH,
+                "change-set scope data: (#{cs_data_graph.inspect}) does not match asserted (#{asserted.inspect})")
+      end
+
+      # PLAN_0.11.0 Phase B — SPARQL-driven over-delete pass.
+      # For each retracted asserted triple T, drop every inferred
+      # triple I in the inferred graph whose `:derivedFrom`
+      # annotation references T. Iterate to fixpoint — transitively
+      # over-deleted triples themselves become "retracted premises"
+      # for the next round.
+      #
+      # Returns the total count of inferred triples dropped.
+      def sparql_over_delete!(inferred, retracted_rows)
+        return 0 if retracted_rows.nil? || retracted_rows.empty?
+
+        # Seed the worklist with the retracted asserted triples.
+        # Each entry is [s, p, o] (graph component dropped — we
+        # only over-delete from the one inferred graph in scope).
+        worklist = retracted_rows.map { |row| row.first(3) }
+        total = 0
+        seen  = ::Set.new(worklist)
+
+        until worklist.empty?
+          batch = worklist
+          worklist = []
+
+          batch.each do |s, p, o|
+            # Find every inferred triple whose :derivedFrom annotation
+            # references this premise.
+            survivors_q = <<~SPARQL
+              SELECT ?s ?p ?o WHERE {
+                << ?s ?p ?o >>
+                  <#{PROV_DERIVED_FROM}>
+                  << #{term(s)} #{term(p)} #{term(o)} >>
+              }
+            SPARQL
+            result = ::Vv::Graph::Sparql.select(survivors_q, graph: inferred)
+            next unless result[:ok]
+
+            result[:results].each do |row|
+              triple = [row["s"], row["p"], row["o"]]
+              next if seen.include?(triple)
+              seen << triple
+              worklist << triple
+            end
+
+            # Drop the inferred triples (and their annotations) in one
+            # DELETE pass per premise.
+            delete_q = <<~SPARQL
+              DELETE { ?s ?p ?o .
+                       << ?s ?p ?o >> ?annot_p ?annot_o . }
+              WHERE  { << ?s ?p ?o >>
+                         <#{PROV_DERIVED_FROM}>
+                         << #{term(s)} #{term(p)} #{term(o)} >> .
+                       OPTIONAL { << ?s ?p ?o >> ?annot_p ?annot_o }
+                     }
+            SPARQL
+            del = ::Vv::Graph::Sparql.execute(delete_q, graph: inferred)
+            # sparql_update returns the signed net delta — a pure
+            # DELETE comes back negative. Track absolute value as
+            # "rows over-deleted."
+            total += del[:count].to_i.abs if del[:ok]
+          end
+        end
+
+        total
+      end
+
+      # Serialise an N-triples-shaped term back into SPARQL text.
+      # Inputs come from a SPARQL SELECT result (already bracketed
+      # for IRIs / quoted for literals) so we pass them through
+      # verbatim. Operator-emitted raw values that aren't already
+      # in that shape are bracket-wrapped (IRIs) or quoted
+      # (literals).
+      def term(raw)
+        s = raw.to_s
+        return s if s.start_with?("<") || s.start_with?('"') || s.start_with?("_:")
+        return s if s.start_with?("<<")
+        s.start_with?("http://", "https://", "urn:") ? "<#{s}>" : %("#{s.gsub('"', '\\"')}")
       end
     end
   end
