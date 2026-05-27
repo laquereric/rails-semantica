@@ -69,6 +69,7 @@ module Vv::Graph
 
       finds      = count_of(ir, ::Vv::Graph::QueryIR::Find)
       limits     = count_of(ir, ::Vv::Graph::QueryIR::Limit)
+      offsets    = count_of(ir, ::Vv::Graph::QueryIR::Offset)
       sorts      = count_of(ir, ::Vv::Graph::QueryIR::Sort)
       counts     = count_of(ir, ::Vv::Graph::QueryIR::Count)
       projects   = count_of(ir, ::Vv::Graph::QueryIR::Project)
@@ -77,17 +78,21 @@ module Vv::Graph
       return refuse_ir_invalid("IR must contain exactly one Find node; got #{finds}") if finds != 1
       return refuse_ir_invalid("Find must be the first node in the IR") unless ir.first.is_a?(::Vv::Graph::QueryIR::Find)
       return refuse_ir_invalid("at most one Limit node permitted (got #{limits})")     if limits > 1
-      return refuse_ir_invalid("at most one Sort node permitted in v0.16.0 (got #{sorts}); multi-sort is additive in v0.17.0") if sorts > 1
+      return refuse_ir_invalid("at most one Offset node permitted (got #{offsets})")   if offsets > 1
       return refuse_ir_invalid("at most one Count node permitted (got #{counts})")     if counts > 1
       return refuse_ir_invalid("at most one Project node permitted (got #{projects})") if projects > 1
       return refuse_ir_invalid("at most one Compare node permitted (got #{compares})") if compares > 1
 
-      if counts > 0 && (limits > 0 || sorts > 0 || projects > 0)
-        return refuse_ir_invalid("Count is incompatible with Limit/Sort/Project in v0.16.0")
+      if offsets > 0 && limits == 0
+        return refuse_ir_invalid("Offset requires a Limit (most engines yield undefined row order otherwise)")
       end
 
-      if compares > 0 && (limits > 0 || sorts > 0 || projects > 0 || counts > 0)
-        return refuse_ir_invalid("Compare is incompatible with Limit/Sort/Project/Count in v0.16.0")
+      if counts > 0 && (limits > 0 || sorts > 0 || projects > 0 || offsets > 0)
+        return refuse_ir_invalid("Count is incompatible with Limit/Sort/Project/Offset")
+      end
+
+      if compares > 0 && (limits > 0 || sorts > 0 || projects > 0 || counts > 0 || offsets > 0)
+        return refuse_ir_invalid("Compare is incompatible with Limit/Sort/Project/Count/Offset")
       end
 
       ir.each_with_index do |node, idx|
@@ -120,6 +125,7 @@ module Vv::Graph
           ::Vv::Graph::QueryIR::FilterIn,
           ::Vv::Graph::QueryIR::Sort,
           ::Vv::Graph::QueryIR::Limit,
+          ::Vv::Graph::QueryIR::Offset,
           ::Vv::Graph::QueryIR::Project,
           ::Vv::Graph::QueryIR::Count,
           ::Vv::Graph::QueryIR::Compare

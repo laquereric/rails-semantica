@@ -153,6 +153,9 @@ module Vv::Graph
             when ::Vv::Graph::QueryIR::Limit
               next unless include_limit
               scope = scope.limit(node.n)
+            when ::Vv::Graph::QueryIR::Offset
+              next unless include_limit
+              scope = scope.offset(node.n)
             end
           end
           scope

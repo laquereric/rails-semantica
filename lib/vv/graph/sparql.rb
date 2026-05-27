@@ -108,7 +108,7 @@ module Vv::Graph
     # `:scope_kwarg_conflict`.
     SPARQL_SCOPE_MAPPING = { data: :graph }.freeze
 
-    def select(query, graph: nil, scope: nil)
+    def select(query, graph: nil, scope: nil, with_types: false)
       resolved = ::Vv::Graph::Scope::FacadeAdapter.resolve(
         scope: scope, kwargs: { graph: graph }, mapping: SPARQL_SCOPE_MAPPING,
       )
@@ -122,8 +122,59 @@ module Vv::Graph
         effective = GraphScoping.scope_read(query, graph)
         json = connection.select_value("SELECT sparql_query(#{connection.quote(effective)})")
         results = json.nil? || json.empty? ? [] : ::JSON.parse(json)
+        results = with_types ? typed_rows(results) : results
         { ok: true, results: results }
       end
+    end
+
+    # PLAN_0.17.0 Phase A — typed-row transformer used by select(...,
+    # with_types: true). Each cell value passes through
+    # Sparql::TermParser.parse_typed, producing
+    # { value:, kind:, datatype:, lang: } Hashes (frozen).
+    def typed_rows(rows)
+      rows.map do |row|
+        row.transform_values { |raw| ::Vv::Graph::Sparql::TermParser.parse_typed(raw).freeze }
+      end
+    end
+
+    # PLAN_0.17.0 Phase B — structured plan for a SPARQL query.
+    #
+    #   Vv::Graph::Sparql.explain(query, graph: nil, scope: nil)
+    #     # => { ok: true,
+    #     #      plan: { kind:, projection:, where:, modifiers:, ... },
+    #     #      estimated_rows: :unknown,
+    #     #      from: :gem_parser }
+    #
+    # The plan shape is pinned at v0.17.0 (see PLAN_0.17.0 Phase B).
+    # `estimated_rows: :unknown` is the v0.17.0 contract — the
+    # engine doesn't expose cardinality. When a future engine
+    # release ships `rdf_sparql_plan`, the gem flips `from:` to
+    # `:engine_planner` + populates `estimated_rows:` by
+    # introspection.
+    #
+    # Read-only: never executes the query. Refusal envelopes match
+    # the existing facade shape; new symbol :sparql_parse_error
+    # surfaces when the parser can't classify the query at all.
+    def explain(query, graph: nil, scope: nil)
+      resolved = ::Vv::Graph::Scope::FacadeAdapter.resolve(
+        scope: scope, kwargs: { graph: graph }, mapping: SPARQL_SCOPE_MAPPING,
+      )
+      return resolved unless resolved.is_a?(Hash) && resolved[:kwargs]
+      graph = resolved[:kwargs][:graph]
+
+      graph_error = validate_graph(graph)
+      return graph_error if graph_error
+
+      plan = ::Vv::Graph::Sparql::Explain.parse(query)
+      if plan[:kind] == ::Vv::Graph::Sparql::Explain::KIND_UNKNOWN
+        return {
+          ok: false,
+          reason: REASON_SPARQL_PARSE_ERROR,
+          because: "Vv::Graph::Sparql.explain: gem-side parser does not recognise this SPARQL form"
+        }
+      end
+
+      { ok: true, plan: plan, estimated_rows: :unknown, from: :gem_parser }
     end
 
     def ask(query, graph: nil, scope: nil)

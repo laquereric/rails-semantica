@@ -87,13 +87,13 @@ RSpec.describe Vv::Graph::QueryIR do
       expect(env[:because]).to match(/exactly one Find/)
     end
 
-    it "refuses two Sort nodes (multi-sort additive in v0.17.0)" do
+    it "permits multiple Sort nodes (PLAN_0.17.0 Phase D loosened this from v0.16.0)" do
       env = described_class.validate([
         find,
         described_class::Sort.new(field: :a),
         described_class::Sort.new(field: :b)
       ])
-      expect(env[:because]).to match(/at most one Sort/)
+      expect(env).to eq(:ok)
     end
 
     it "refuses two Limit nodes" do

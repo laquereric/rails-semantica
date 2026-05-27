@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.17.0 — 2026-05-27
+
+- **PLAN_0.17.0 Phase D — QueryIR multi-sort + `Offset`.**
+  Multiple `Sort` nodes now permitted (v0.16.0's "one Sort max"
+  loosened); their IR order becomes the ORDER BY key order on
+  both backends. New `Vv::Graph::QueryIR::Offset` value object
+  (frozen Struct; `n:`). Composition rules: at most one Offset,
+  `Offset` without `Limit` refuses with `:ir_invalid`. The
+  SPARQL backend emits `ORDER BY <k1> <k2> ...` + `OFFSET N`;
+  the Relational backend chains `.order(...).order(...)` and
+  `.offset(n)`. Closes the v0.16.0 "additive in v0.17.0" note.
+- **PLAN_0.17.0 Phase C — `Vv::Graph::Shacl.load_shapes(source,
+  format:, scope:)`.** File-or-string SHACL shapes loader.
+  `format: :ttl` routes through engine `rdf_load_turtle_to_graph`;
+  `format: :nt` routes through `Sparql.execute("INSERT DATA …")`.
+  Default scope `urn:vv-graph:shapes`. Idempotent — SHA-256
+  content-hash lives in a sibling `urn:vv-graph:shapes:meta`
+  graph; matching hash returns `{ ok: true, loaded: 0, reason:
+  :unchanged }` without touching the shapes scope. Pinned
+  refusal symbols `:shapes_file_missing`,
+  `:shapes_format_unknown`, `:shapes_parse_error`. File-extension
+  heuristic distinguishes path-like strings (`.ttl`, `.nt`,
+  `.n3`, `.rdf`, `.shapes`, `.shacl`) from inline bodies.
+  Closes CR-GM ask #5.
+- **PLAN_0.17.0 Phase B — `Vv::Graph::Sparql.explain(query,
+  graph:, scope:)`.** Read-only structured plan for the SPARQL
+  slice the gem accepts (SELECT / ASK / CONSTRUCT plus the
+  v0.3.0 UPDATE forms — INSERT DATA, DELETE DATA, INSERT WHERE,
+  DELETE WHERE, CLEAR, LOAD, DROP). New `Vv::Graph::Sparql::Explain`
+  module owns the gem-side parser. Envelope:
+  `{ ok:, plan: { kind:, projection:, where:, modifiers:, ... },
+  estimated_rows: :unknown, from: :gem_parser }`.
+  `estimated_rows: :unknown` is pinned — when a future engine
+  release ships `rdf_sparql_plan`, the gem flips `from:` to
+  `:engine_planner` + populates an integer by introspection.
+  Unparseable forms refuse with `:sparql_parse_error`. Closes
+  CR-GM ask #2.
+- **PLAN_0.17.0 Phase A — `Vv::Graph::Sparql.select(..., with_types:
+  true)`.** Opt-in typed-row shape: each cell becomes
+  `{ value:, kind:, datatype:, lang: }` (frozen) instead of the
+  flat N-triples-ish string. `kind:` values pinned at `:iri`,
+  `:literal`, `:blank_node`, `:quoted_triple`, `:unknown`. New
+  `Vv::Graph::Sparql::TermParser` module hosts the parser;
+  Backend::Sparql's `unwrap_literal` (v0.16.0) delegates to it.
+  `with_types: false` (default) keeps the v0.1.0 behaviour
+  byte-for-byte. Closes CR-GM ask #1.
+
 ## 0.16.0 — 2026-05-27
 
 - **PLAN_0.16.0 Phase D — `Vv::Graph::Loader.normalize_schema!`

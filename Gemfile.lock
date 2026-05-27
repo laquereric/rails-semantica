@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    vv-graph (0.16.0)
+    vv-graph (0.17.0)
       activerecord (~> 8.0)
       activesupport (~> 8.0)
       railties (~> 8.0)
@@ -242,7 +242,7 @@ CHECKSUMS
   tzinfo (2.0.6) sha256=8daf828cc77bcf7d63b0e3bdb6caa47e2272dcfaf4fbfe46f8c3a9df087a829b
   uri (1.1.1) sha256=379fa58d27ffb1387eaada68c749d1426738bd0f654d812fcc07e7568f5c57c6
   useragent (0.16.11) sha256=700e6413ad4bb954bb63547fa098dddf7b0ebe75b40cc6f93b8d54255b173844
-  vv-graph (0.16.0)
+  vv-graph (0.17.0)
   zeitwerk (2.8.1) sha256=1c85e0f28954d68cd16e575da37f26846f609b68d80b5942ccfd31030c2449d5
 
 BUNDLED WITH

@@ -102,14 +102,16 @@ module Vv::Graph
           find    = required_find(ir)
           fields  = field_set(ir)
           project = ir.find { |n| n.is_a?(::Vv::Graph::QueryIR::Project) }
-          sort    = ir.find { |n| n.is_a?(::Vv::Graph::QueryIR::Sort) }
+          sorts   = ir.select { |n| n.is_a?(::Vv::Graph::QueryIR::Sort) }
           limit   = ir.find { |n| n.is_a?(::Vv::Graph::QueryIR::Limit) }
+          offset  = ir.find { |n| n.is_a?(::Vv::Graph::QueryIR::Offset) }
 
           select_vars = compile_select_vars(project: project, fields: fields)
           where = compile_where(find: find, ir: ir, fields: fields)
           tail  = +""
-          tail << " ORDER BY #{compile_sort(sort)}" if sort
+          tail << " ORDER BY #{sorts.map { |s| compile_sort(s) }.join(' ')}" unless sorts.empty?
           tail << " LIMIT #{Integer(limit.n)}" if limit
+          tail << " OFFSET #{Integer(offset.n)}" if offset
           "SELECT #{select_vars} WHERE { #{where} }#{tail}"
         end
 
@@ -233,55 +235,14 @@ module Vv::Graph
         # Unwrap each cell of an SPARQL result row into a plain Ruby
         # value. Strips N-triples literal quoting + typed-literal
         # tails so results align with the Relational backend.
+        # Delegates the per-term work to the shared
+        # Vv::Graph::Sparql::TermParser (PLAN_0.17.0 Phase A).
         def unwrap_rows(rows)
           rows.map { |row| row.transform_values { |v| unwrap_literal(v) } }
         end
 
-        # Engine returns literals as N-triples-ish strings:
-        #   "Alpha"               → "Alpha"
-        #   "2"^^<...integer>     → 2
-        #   "3.14"^^<...double>   → 3.14
-        #   "true"^^<...boolean>  → true
-        #   <urn:x>               → "urn:x" (bracket-stripped IRI)
-        #   "2026-05-27T...Z"^^<...dateTime> → kept as string for parity
         def unwrap_literal(raw)
-          return raw unless raw.is_a?(String)
-          # IRI form
-          if raw.start_with?("<") && raw.end_with?(">")
-            return raw[1..-2]
-          end
-          # Typed-literal form: "value"^^<datatype>
-          if (m = raw.match(/\A"((?:[^"\\]|\\.)*)"\^\^<([^>]+)>\z/))
-            value = m[1].gsub(/\\(.)/, '\1')
-            datatype = m[2]
-            return coerce_literal(value, datatype)
-          end
-          # Plain string literal: "..."
-          if raw.start_with?('"') && raw.end_with?('"')
-            return raw[1..-2].gsub(/\\(.)/, '\1')
-          end
-          raw
-        end
-
-        XSD_NS = "http://www.w3.org/2001/XMLSchema#"
-
-        def coerce_literal(value, datatype)
-          return value unless datatype.start_with?(XSD_NS)
-          case datatype.sub(XSD_NS, "")
-          when "integer", "int", "long", "short", "byte",
-               "nonNegativeInteger", "nonPositiveInteger",
-               "positiveInteger", "negativeInteger",
-               "unsignedLong", "unsignedInt", "unsignedShort", "unsignedByte"
-            Integer(value)
-          when "double", "float", "decimal"
-            Float(value)
-          when "boolean"
-            value == "true"
-          else
-            value
-          end
-        rescue ArgumentError, TypeError
-          value
+          ::Vv::Graph::Sparql::TermParser.parse_plain(raw)
         end
 
         # SPARQL term serialisation. Strings literal-quoted; numerics

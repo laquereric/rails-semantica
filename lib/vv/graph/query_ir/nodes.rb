@@ -58,6 +58,17 @@ module Vv::Graph
       end
     end
 
+    # PLAN_0.17.0 Phase D — pagination companion to Limit.
+    # Composition rule: at most one Offset; Offset without a Limit
+    # refuses with :ir_invalid (SPARQL permits it but most engines
+    # treat the result as undefined-row-order).
+    Offset = Struct.new(:n, keyword_init: true) do
+      def initialize(n:)
+        super(n: n)
+        freeze
+      end
+    end
+
     Project = Struct.new(:fields, keyword_init: true) do
       def initialize(fields:)
         super(fields: fields.to_a.freeze)

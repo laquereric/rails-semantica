@@ -1,6 +1,6 @@
 # PLAN_0.17.0 — vv-graph: SPARQL ergonomics + QueryIR additives
 
-**Status.** Draft.
+**Status.** Shipped (Phases A/B/C/D landed; see `CHANGELOG.md` § 0.17.0).
 **Target gem version.** `vv-graph` v0.17.0.
 **Author.** Architect (Eric).
 **Date.** 2026-05-27.

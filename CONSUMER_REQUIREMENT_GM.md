@@ -215,7 +215,19 @@ These are GM-side asks. None block PLAN_0_1_0 Phase A; **Phase F is
 gated on ask #3 below.** Each ask describes the shape GM wants, why,
 and what GM would do until it lands.
 
-### 1. `Vv::Graph::Sparql.select` returns optional column metadata
+### 1. `Vv::Graph::Sparql.select` returns optional column metadata — **LANDED in 0.17.0 (Phase A)**
+
+Live as the `with_types: true` kwarg on `Vv::Graph::Sparql.select`.
+Per-binding cells become frozen Hashes
+`{ value:, kind:, datatype:, lang: }`. Pinned `:kind` values:
+`:iri`, `:literal`, `:blank_node`, `:quoted_triple`, `:unknown`
+(engine-quirk forms). `with_types: false` (default) preserves
+the v0.1.0 flat-Hash shape byte-for-byte. The shared
+`Vv::Graph::Sparql::TermParser` is the single parser
+implementation; Backend::Sparql (v0.16.0) now delegates its
+`unwrap_literal` to it. Original ask preserved below.
+
+---
 
 **Today.** `select` returns `{ ok: true, results: [{ "p" => "...", ... }] }`.
 Column types (literal vs IRI, datatype IRIs) are not surfaced — GM
@@ -236,7 +248,37 @@ Result struct. Today GM regex-sniffs; that's brittle.
 
 **Until it lands.** GM keeps the regex sniffer; a comment cites this CR.
 
-### 2. `Vv::Graph::Sparql.explain(query, graph:)`
+### 2. `Vv::Graph::Sparql.explain(query, graph:)` — **LANDED in 0.17.0 (Phase B)**
+
+Live. Returns `{ ok: true, plan: { kind:, projection:, where:,
+modifiers:, ... }, estimated_rows: :unknown, from: :gem_parser }`.
+The gem-side parser (`Vv::Graph::Sparql::Explain`) handles the
+SPARQL slice vv-graph's own surfaces emit: SELECT, ASK,
+CONSTRUCT, and the v0.3.0 UPDATE forms (INSERT DATA, DELETE
+DATA, INSERT WHERE, DELETE WHERE, CLEAR, LOAD, DROP).
+Unparseable forms refuse with `:sparql_parse_error`. Three
+notes on how the landed shape differs from the original ask:
+
+- **`estimated_rows: :unknown` is pinned for v0.17.0.** The
+  engine has no cardinality estimator. The shape leaves room
+  for an integer once a future engine release ships
+  `rdf_sparql_plan`; `from:` flips `:gem_parser` →
+  `:engine_planner` as the observable change. Consumers wanting
+  real numbers today fall back to the
+  "all-semantic-to-SPARQL, all-exact-match-to-AR" heuristic
+  the original ask described.
+- **The parser is intentionally narrow.** SPARQL forms outside
+  the gem's own emission slice (e.g. nested SELECTs, complex
+  GROUP_CONCAT aggregations) return `:sparql_parse_error`
+  rather than a partially-populated plan. Consumers needing
+  richer coverage file a follow-up ask.
+- **Read-only.** `explain` never executes the query. Engine
+  validity is not checked — operators who want syntax linting
+  run the query.
+
+Original ask preserved below.
+
+---
 
 **Today.** No way to ask vv-graph what the engine would actually do
 with a query before running it.
@@ -381,7 +423,21 @@ end
 
 Add to the existing capability-predicate set on the `Vv::Graph` module.
 
-### 5. SHACL shapes loader
+### 5. SHACL shapes loader — **LANDED in 0.17.0 (Phase C)**
+
+Live as `Vv::Graph::Shacl.load_shapes(source, format: :ttl,
+scope: nil)`. Accepts a file path, an inline string body, or
+an IO. `format: :ttl` (default) routes through engine
+`rdf_load_turtle_to_graph`; `format: :nt` routes through
+`Sparql.execute("INSERT DATA …")` after a line-based normalise.
+Default scope `urn:vv-graph:shapes`. Idempotent — SHA-256 of
+the canonicalised input lives in `urn:vv-graph:shapes:meta`;
+matching hash returns `{ ok: true, loaded: 0, reason:
+:unchanged }` without touching the shapes scope. Pinned refusal
+symbols `:shapes_file_missing`, `:shapes_format_unknown`,
+`:shapes_parse_error`. Original ask preserved below.
+
+---
 
 **Today.** Shapes are loaded by N-triples insert into the `:shapes`
 scope. Each consumer reinvents the loader.
