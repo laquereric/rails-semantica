@@ -1,4 +1,4 @@
-# PLAN_0.12.0 — `rails-semantica` SHACL Rules (shape-scoped derivation)
+# PLAN_0.12.0 — `vv-graph` SHACL Rules (shape-scoped derivation)
 
 > *PLAN_0.9.0 shipped OWL 2 RL — broad, schema-driven inference
 > ("anyone who investigates a case is a detective"). PLAN_0.10.0
@@ -30,7 +30,7 @@ either.
 | Anchor | Where | Role |
 |---|---|---|
 | `PLAN_0.10.0.md` | this dir | SHACL Core. v0.12.0 extends the `Shape` concern's `shape do … end` DSL with `rule do … end` recorders. The constraint catalogue from PLAN_0.10.0 stays in place — v0.12.0 is purely additive on the derivation side. |
-| `PLAN_0.9.0.md` | this dir | OWL 2 RL reasoner. **Sibling, not replacement.** Operators pick between ontology-driven OWL inference and shape-driven SHACL derivation per axiom; the two can coexist in one model. v0.12.0's `Semantica::Reasoner.materialise!` grows a `rules:` value `:shacl_rules` that runs SHACL Rules; passing both runs OWL first, then SHACL Rules (sh:order respected within SHACL). |
+| `PLAN_0.9.0.md` | this dir | OWL 2 RL reasoner. **Sibling, not replacement.** Operators pick between ontology-driven OWL inference and shape-driven SHACL derivation per axiom; the two can coexist in one model. v0.12.0's `Vv::Graph::Reasoner.materialise!` grows a `rules:` value `:shacl_rules` that runs SHACL Rules; passing both runs OWL first, then SHACL Rules (sh:order respected within SHACL). |
 | `PLAN_0.11.0.md` | this dir | Incremental reasoning. SHACL Rule derivations emit the same `:derivedFrom << premise >>` provenance triples OWL 2 RL emits; DRed traversal is identical. The `:incremental_save` lifecycle mode covers SHACL Rules out of the box. |
 | `PLAN_0.8.0.md` | this dir | RDF-star. Provenance on rule-derived triples uses the v0.8.0 annotation surface; pinned by the equivalence spec. |
 | `PLAN_0.5.0.md` | this dir | Named graphs. SHACL Rules derive into the same inferred-graph IRI OWL 2 RL writes; operators distinguish the source by inspecting `:derivedBy` on the RDF-star annotation. |
@@ -39,7 +39,7 @@ either.
 | MM-side derivation research note | MM repo | **TBD.** Open question for MM: which derivations are "ontological" (OWL 2 RL) and which are "business-logic" (SHACL Rules)? A companion note in `magentic-market-ai/docs/research/` should walk the dividing line. |
 | `CONSUMER_REQUIREMENT_MM.md` | this repo | Drift target. v0.12.0 adds the SHACL Rules surface block once MM signals adoption. |
 
-## Engine prerequisites (sqlite-sparql ≥ 0.9.1) — **already satisfied**
+## Engine prerequisites (sqlite-sparql ≥ 0.12.0) — **already satisfied**
 
 `sh:TripleRule` expands to an `INSERT { ?focus <p> ?o } WHERE
 { … }` form already routed through `sparql_update` (PLAN_0.3.0).
@@ -48,6 +48,22 @@ an INSERT WHERE — also routed through `sparql_update` for the
 per-rule shape, or through `rdf_construct_many` (engine v0.8.0)
 for the batched shape (see below). RDF-star provenance annotations
 ride PLAN_0.8.0's surface.
+
+The engine floor bump from `≥ 0.9.1` to `≥ 0.12.0` is inherited
+from PLAN_0.11.0 (which adopts engine v0.12.0's `rdf_dred_overdelete`
++ `track_dependencies`). v0.12.0's SHACL Rules surface doesn't
+*directly* require any 0.10.0/0.11.0/0.12.0 engine surface for
+its own derivation path — `sparql_update` + `rdf_construct_many`
+(engine v0.8.0) is all the rules slice needs — but Phase D's
+composition with DRed inherits the floor. SHACL Rules derivations
+do **not** yet participate in engine v0.12.0's native dependency
+index: engine v0.12.0 documents under § "Out of scope (revisit on
+consumer signal)" that "`rdf_construct_many` → index write-through
+would let SHACL Rules materialisations participate in DRed."
+Until that lands, v0.12.0's DRed integration (Phase D) rides
+PLAN_0.11.0's SPARQL fall-back path — correct for every SHACL Rule,
+just slower per retracted premise than the OWL 2 RL 5-rule
+native-cascade path.
 
 ### Per-rule vs. batched execution
 
@@ -122,15 +138,15 @@ schema), then SHACL Rules (the focus-node-scoped derivations).
 
 ## Gem-side scope
 
-### Phase A — `Semantica::Shacl::Rules` derivation surface
+### Phase A — `Vv::Graph::Shacl::Rules` derivation surface
 
 The single entry point. Materialises SHACL Rules' derivations
 into the same inferred graph PLAN_0.9.0's reasoner writes.
 
 ```ruby
-Semantica::Shacl::Rules.materialise!(
+Vv::Graph::Shacl::Rules.materialise!(
   data_graph:   "urn:mm:graph:catalogue",
-  shapes_graph: "urn:semantica:shapes:product",
+  shapes_graph: "urn:vv-graph:shapes:product",
   inferred:     "urn:mm:graph:catalogue:inferred",
   rules:        :all,                              # or :rule_iris, see below
   provenance:   true,
@@ -147,17 +163,17 @@ Semantica::Shacl::Rules.materialise!(
 Alternatively via the unified facade:
 
 ```ruby
-Semantica::Reasoner.materialise!(
+Vv::Graph::Reasoner.materialise!(
   asserted:    "urn:mm:graph:catalogue",
   inferred:    "urn:mm:graph:catalogue:inferred",
   rules:       [:owl_2_rl, :shacl_rules],          # both passes; OWL first
-  shapes_graph: "urn:semantica:shapes:product",    # required for :shacl_rules
+  shapes_graph: "urn:vv-graph:shapes:product",    # required for :shacl_rules
 )
 ```
 
 #### Implementation
-- `Semantica::Shacl::Rules` is a module facade parallel to
-  `Semantica::Reasoner` and `Semantica::Shacl`. Never raises;
+- `Vv::Graph::Shacl::Rules` is a module facade parallel to
+  `Vv::Graph::Reasoner` and `Vv::Graph::Shacl`. Never raises;
   structured envelopes.
 - `materialise!`:
   1. Validate inputs — same `:invalid_graph` /
@@ -220,8 +236,8 @@ block PLAN_0.10.0 introduced for validation.
 
 ```ruby
 class Product < ApplicationRecord
-  include Semantica::Storable
-  include Semantica::Shacl::Shape
+  include Vv::Graph::Storable
+  include Vv::Graph::Shacl::Shape
 
   triples do
     subject -> { "urn:mm:product:#{sku}" }
@@ -252,7 +268,7 @@ class Product < ApplicationRecord
     sparql_rule do
       description "Promote products with >100 orders to VIP"
       order       2
-      condition   "urn:semantica:shape:Product"    # only validating products
+      condition   "urn:vv-graph:shape:Product"    # only validating products
       construct <<~SPARQL
         CONSTRUCT { ?focus mm:tier mm:VIP . }
         WHERE   { ?focus mm:total_orders ?n . FILTER(?n > 100) }
@@ -273,16 +289,16 @@ end
     `description`, `order`, `condition`, `deactivated`, and
     a `construct` string (the embedded CONSTRUCT).
 - Both recorders finalize to a frozen `Rule` value object
-  (`Semantica::Shacl::Rule`) and emit the corresponding RDF
+  (`Vv::Graph::Shacl::Rule`) and emit the corresponding RDF
   triples into the shapes graph (idempotent — same
   read-replace dispatch the rest of `Shape` uses).
 - Each rule is emitted with a stable IRI:
-  `urn:semantica:rule:<class_name>/<rule_index>`.
+  `urn:vv-graph:rule:<class_name>/<rule_index>`.
 - The two recorder types share a base — `Rule::TripleRule` and
-  `Rule::SparqlRule` both subclass `Semantica::Shacl::Rule`.
+  `Rule::SparqlRule` both subclass `Vv::Graph::Shacl::Rule`.
 - Class methods on the AR model:
   - `Product.materialise_rules!(scope:)` — convenience
-    wrapper for `Semantica::Shacl::Rules.materialise!`
+    wrapper for `Vv::Graph::Shacl::Rules.materialise!`
     against the model's shapes graph.
   - `Product.rule_iris` — list of rule IRIs declared on the
     model (useful for selective derivation:
@@ -329,11 +345,11 @@ model, the orchestrator runs them in a pinned order.
    evaluation.
 
 #### Implementation
-- `Semantica::Reasoner.materialise!` accepts `rules:` as an
+- `Vv::Graph::Reasoner.materialise!` accepts `rules:` as an
   array; values `:owl_2_rl` and `:shacl_rules` (with a
   required `shapes_graph:` kwarg when the latter is present)
   run the two passes in array order.
-- The combined-pass orchestrator (`Semantica::IncrementalPass`
+- The combined-pass orchestrator (`Vv::Graph::IncrementalPass`
   from PLAN_0.11.0) gets a new pinned default ordering:
   `[:owl_2_rl, :shacl_rules]` followed by validation.
 - Operators with circular dependencies between the two surfaces
@@ -355,27 +371,56 @@ model, the orchestrator runs them in a pinned order.
 
 ### Phase D — Incremental composition with DRed (PLAN_0.11.0)
 
-SHACL Rules derivations participate in DRed identically to OWL 2
-RL derivations — same `:derivedFrom << premise >>` annotation,
-same over-delete-then-rederive cycle.
+SHACL Rules derivations participate in DRed with the **same
+algorithm** as OWL 2 RL derivations — same
+`:derivedFrom << premise >>` annotation, same
+over-delete-then-rederive cycle — but on the **SPARQL fall-back
+surface only**, not the engine v0.12.0 native dependency index.
+
+Engine v0.12.0's `DependencyIndex` write-through fires from
+`rdf_owl_rl_materialise` only; `rdf_construct_many` (the surface
+SHACL Rules' batched path rides) does **not** populate the index
+in v0.12.0 — explicitly listed in engine v0.12.0's "Out of scope
+(revisit on consumer signal)" section. Until a future engine
+release adds either `rdf_construct_many → index write-through`
+or a paired `rdf_dred_record_derivation(inferred, premises_json)`
+SQL function the gem can call gem-side after each
+`Sparql.bulk_insert` of rule output, SHACL-Rules-derived triples
+ride PLAN_0.11.0's `dependency_index: :sparql` path
+unconditionally.
+
+This is correctness-preserving — DRed over the RDF-star annotation
+graph is the same algorithm, just slower per retracted premise
+than the native cascade — and operator-invisible: the same
+`Vv::Graph::Reasoner.materialise_incremental!` envelope reports
+the `over_deleted_via_sparql:` field PLAN_0.11.0 specs.
 
 #### Implementation
 - The orchestrator's incremental path
-  (`Semantica::IncrementalPass.materialise_incremental!`) calls
+  (`Vv::Graph::IncrementalPass.materialise_incremental!`) calls
   `Shacl::Rules.materialise_incremental!` after
   `Reasoner.materialise_incremental!` — same pinned order as
   full-pass.
 - `Shacl::Rules.materialise_incremental!(asserted:, inferred:,
   shapes_graph:, changes:, …)` runs DRed Phase 1 + 2 over
-  rule-derived triples:
+  rule-derived triples, **always via the SPARQL surface**
+  (not via `rdf_dred_overdelete`):
   - Phase 1: drop every triple whose `:derivedBy` annotation
     names a SHACL rule IRI **and** whose `:derivedFrom`
-    touches a retracted premise.
+    touches a retracted premise. SPARQL UPDATE
+    `DELETE { ?s ?p ?o } WHERE { << ?s ?p ?o >> :derivedBy ?rule ;
+    :derivedFrom ?premise . FILTER(?premise IN (...)) }`.
   - Phase 2: re-evaluate every rule whose triggering pattern
     matches the changed slice.
 - Equivalence pin (PLAN_0.11.0's spec template): incremental
   vs. full-pass produces identical SHACL-Rules-derived triples
   modulo `:derivedAt` timestamps.
+- v0.12.0 files a follow-up bullet under
+  `CONSUMER_REQUIREMENT_VvGraph.md` (engine repo) item #8
+  asking for `rdf_construct_many → index write-through` (or
+  the equivalent `rdf_dred_record_derivation` ergonomic).
+  Gated on telemetry from MM about whether SHACL Rules
+  retractions are a hot path.
 
 #### Exit criteria
 - Spec: equivalence pin under DRed for SHACL Rules.
@@ -440,8 +485,10 @@ end
 - W3C SHACL-AF test suite's rules slice — every test case
   exercising `sh:TripleRule` or `sh:SPARQLRule` (excluding
   the JS / NodeExpression cases) passes.
-- `bin/check` green against engine ≥ 0.9.1 (no new pin — SHACL
-  Rules rides the existing surfaces).
+- `bin/check` green against engine ≥ 0.12.0 (pin inherited from
+  PLAN_0.11.0; SHACL Rules' own derivation path doesn't need any
+  surface beyond engine 0.8.0's `rdf_construct_many` + the
+  PLAN_0.3.0 `sparql_update` path).
 
 ### Phase G — Docs
 
@@ -512,7 +559,7 @@ end
 | Operators expect `sh:JSRule` / `sh:expression` and don't get them. | README leads with the "rules slice only" framing + `:unknown_rule_type` refusal envelope. |
 | Non-monotonic rules (MINUS / FILTER NOT EXISTS) break DRed correctness silently. | v0.12.0 statically inspects rule bodies for `MINUS` / `FILTER NOT EXISTS` / `OPTIONAL`-with-bind tokens; refuses with `:non_monotonic_rule_set`. False positives possible (some FILTER NOT EXISTS uses are monotonic in context); document the workaround as "rewrite to UNION + binding-then-filter" or use OWL 2 RL where applicable. |
 | Per-rule fire counts blow up the envelope for shapes with hundreds of rules. | `per_rule:` is a Hash; operators worried about envelope size pass `per_rule: false` (default `true` for ergonomics). Documented. |
-| Rule IRI naming (`urn:semantica:rule:<class_name>/<rule_index>`) becomes unstable when operators reorder rules in source. | The IRI uses *index* — reordering the source changes the IRI, which makes prior `:derivedBy` annotations point at "moved" rules. v0.12.0 documents the indexing convention; operators wanting IRI stability set `rule_iri "urn:..."` explicitly on the rule recorder. |
+| Rule IRI naming (`urn:vv-graph:rule:<class_name>/<rule_index>`) becomes unstable when operators reorder rules in source. | The IRI uses *index* — reordering the source changes the IRI, which makes prior `:derivedBy` annotations point at "moved" rules. v0.12.0 documents the indexing convention; operators wanting IRI stability set `rule_iri "urn:..."` explicitly on the rule recorder. |
 | Operators forget that SHACL Rules can be deactivated via `sh:deactivated true` (vs. removing them from the shape entirely). | Doc-only. README's "tune your shapes" section lists `sh:deactivated true` as the canonical way to toggle a rule off without deleting it. |
 | Order of operations (OWL → SHACL Rules → SHACL validation) is opinionated and may surprise operators expecting a different order. | Pinned by spec; documented in CONSUMER_REQUIREMENT_MM.md. Operators wanting a different order author the orchestration manually via direct calls to `Reasoner.materialise!`, `Shacl::Rules.materialise!`, and `Shacl.validate!` in their preferred order. |
 
@@ -523,7 +570,7 @@ end
    green.
 3. Cross-surface composition spec (OWL 2 RL → SHACL Rules)
    green.
-4. `bin/check` green against engine ≥ 0.9.1.
+4. `bin/check` green against engine ≥ 0.12.0.
 5. CHANGELOG `0.12.0` heading drops `(unreleased)`.
 6. `VERSION` → `0.12.0`.
 7. README documents the `triple_rule` + `sparql_rule` DSL,
@@ -538,18 +585,18 @@ end
 
 | Surface | Shape | Mutability |
 |---|---|---|
-| `Semantica::Shacl::Rules.materialise!(data_graph:, shapes_graph:, inferred:, rules:, provenance:, max_iterations:)` | module method | **Pinned.** |
-| `Semantica::Shacl::Rules.materialise_incremental!(asserted:, inferred:, shapes_graph:, changes:, …)` | module method | **Pinned.** |
-| `Semantica::Shacl::Rule` value object base | class | **Pinned.** |
-| `Semantica::Shacl::Rule::TripleRule` + `::SparqlRule` subclasses | classes | **Pinned.** |
+| `Vv::Graph::Shacl::Rules.materialise!(data_graph:, shapes_graph:, inferred:, rules:, provenance:, max_iterations:)` | module method | **Pinned.** |
+| `Vv::Graph::Shacl::Rules.materialise_incremental!(asserted:, inferred:, shapes_graph:, changes:, …)` | module method | **Pinned.** |
+| `Vv::Graph::Shacl::Rule` value object base | class | **Pinned.** |
+| `Vv::Graph::Shacl::Rule::TripleRule` + `::SparqlRule` subclasses | classes | **Pinned.** |
 | `Storable::DSL` `shape do; triple_rule do; subject :focus_node; predicate "…"; object …; order N; condition "…"; deactivated true; end; sparql_rule do; construct "…"; …; end; end` | DSL keywords | **Pinned.** |
 | `Storable::DSL` `shape do; derive_on :explicit\|:save\|:incremental_save\|{block}; end` | DSL keyword | **Pinned.** |
-| `Semantica::Reasoner.materialise!` `rules:` accepts array `[:owl_2_rl, :shacl_rules]` | shape extension | **Pinned.** |
+| `Vv::Graph::Reasoner.materialise!` `rules:` accepts array `[:owl_2_rl, :shacl_rules]` | shape extension | **Pinned.** |
 | `:rule_parse_error` reason symbol | refusal envelope | **Pinned.** |
 | `:unknown_rule_type` reason symbol | refusal envelope (includes IRI list) | **Pinned.** |
 | `:condition_shape_missing` reason symbol | refusal envelope | **Pinned.** |
 | Envelope fields: `rules_fired:`, `per_rule:` (Hash<IRI, Int>) | rules-materialise! return | **Pinned.** |
-| Rule IRI convention (`urn:semantica:rule:<class_name>/<rule_index>`) | derived default | **Pinned**. Operators set `rule_iri "..."` for stability. |
+| Rule IRI convention (`urn:vv-graph:rule:<class_name>/<rule_index>`) | derived default | **Pinned**. Operators set `rule_iri "..."` for stability. |
 
 ## Cross-references
 
@@ -581,7 +628,12 @@ end
   — the integration safety net for Phase B + Phase F.
 - DRed (Gupta, Mumick, Subrahmanian 1993) — incremental
   Datalog over the unified dependency graph.
-- `sqlite-sparql/CHANGELOG.md` § `0.9.1` — engine pin v0.12.0
-  inherits from v0.8.0 / v0.9.1 / v0.10.0 / v0.11.0. The 0.8.0
-  release landed `rdf_construct_many` — the batched-execution
-  surface v0.12.0's opt-in shape rides on.
+- `sqlite-sparql/CHANGELOG.md` § `0.12.0` — engine pin v0.12.0
+  inherits, lifted from `≥ 0.9.1` by PLAN_0.11.0's adoption of
+  `rdf_dred_overdelete` + `track_dependencies`. The 0.8.0 release
+  landed `rdf_construct_many` — the batched-execution surface
+  v0.12.0's opt-in shape rides on. Engine 0.12.0's
+  "Out of scope" note records that `rdf_construct_many → index
+  write-through` (the surface that would let SHACL-Rules-derived
+  triples participate in the native DRed cascade) is deferred;
+  Phase D rides PLAN_0.11.0's SPARQL fall-back until that lands.
