@@ -520,6 +520,146 @@ Vv::Graph.checkpoint_can_round_trip?(content_kind: :nope)
 # => raises ArgumentError naming the known content_kinds
 ```
 
+`Vv::Graph.schema_normalized?` lands in v0.16.0 — see the
+schema-normalization section below.
+
+### Schema normalization — `Vv::Graph::Loader.normalize_schema!` (v0.16.0)
+
+Reads ActiveRecord's schema and emits a deterministic RDF mapping
+into the `:schema` named graph (default `urn:vv-graph:schema`).
+Per AR class: `mm:Model a owl:Class`. Per plain column:
+`mm:Model/col a owl:DatatypeProperty ; rdfs:domain mm:Model ;
+rdfs:range <xsd:type>`. Per FK column (ends in `_id` with a known
+target reflection): `mm:Model/col a owl:ObjectProperty` with the
+target class as `rdfs:range`. Idempotent — `CLEAR GRAPH` runs
+first, so re-running converges on the current AR state.
+Default-excludes `ar_internal_metadata`, `schema_migrations`,
+`active_storage_*`, `action_text_*`.
+
+```ruby
+Vv::Graph::Loader.normalize_schema!(iri_prefix: "mm:")
+# => { ok: true, classes: 12, datatype_properties: 84,
+#      object_properties: 11, schema_graph: "urn:vv-graph:schema" }
+
+Vv::Graph.schema_normalized?           # => true after the first call
+Vv::Graph.schema_normalization_info    # => { schema_graph:, iri_prefix: }
+```
+
+`Vv::Graph::Schema.field(model:, name:)` resolves symbolic field
+references via the captured prefix (`<prefix><Model>/<col>`) and
+AR introspection (`ar_column:`, `xsd:`); operators override
+per-field via `Schema.override(...)`.
+
+### QueryIR — storage-agnostic query algebra (v0.16.0)
+
+A small frozen algebra (`Find`, `Filter`, `FilterRange`,
+`FilterIn`, `Sort`, `Limit`, `Project`, `Count`, `Compare` +
+v0.17.0's `Offset`) lowered to either SPARQL or ActiveRecord
+scopes. Consumers compose a flat list; the gem picks the
+backend.
+
+```ruby
+ir = [
+  Vv::Graph::QueryIR::Find.new(type: :Product),
+  Vv::Graph::QueryIR::Filter.new(field: :brand, op: :eq, value: "Epson"),
+  Vv::Graph::QueryIR::Sort.new(field: :price, dir: :desc),
+  Vv::Graph::QueryIR::Limit.new(n: 10),
+]
+
+Vv::Graph::QueryIR.run(ir, scope: "urn:mm:graph:catalogue")
+# => { ok: true, results: [...], from: :sparql }
+
+Vv::Graph::QueryIR.run(ir, backend: :relational)
+# => { ok: true, results: [...], from: :relational }
+```
+
+The router picks via four-layer precedence: explicit `backend:`
+hint > `ENV["VV_GRAPH_QUERY_BACKEND"]` > capability fit (when
+one backend lacks a needed capability) > configured default
+(`Vv::Graph.config.default_query_backend`, default `:sparql`).
+Capability gaps surface as `:backend_missing_capability`
+refusals with `missing:` + `available_backends:` fields.
+
+### Typed result rows — `Sparql.select(with_types: true)` (v0.17.0)
+
+Opt-in cell-shape change. Each result cell becomes a frozen
+`{ value:, kind:, datatype:, lang: }` Hash instead of the flat
+N-triples-ish string. Pinned `:kind` values: `:iri`, `:literal`,
+`:blank_node`, `:quoted_triple`, `:unknown`.
+
+```ruby
+Vv::Graph::Sparql.select(
+  "SELECT ?p ?o WHERE { <urn:x> ?p ?o }",
+  with_types: true,
+)
+# => { ok: true,
+#      results: [
+#        { "p" => { value: "mm:Product/price",
+#                   kind: :iri, datatype: nil, lang: nil },
+#          "o" => { value: "42",
+#                   kind: :literal,
+#                   datatype: "http://www.w3.org/2001/XMLSchema#integer",
+#                   lang: nil } } ] }
+```
+
+`with_types: false` (default) preserves the v0.1.0 flat-Hash
+shape byte-for-byte.
+
+### Query plan — `Sparql.explain` (v0.17.0)
+
+Read-only structured plan for the SPARQL slice the gem accepts
+(SELECT / ASK / CONSTRUCT plus the v0.3.0 UPDATE forms).
+
+```ruby
+Vv::Graph::Sparql.explain(
+  "SELECT ?s WHERE { ?s a <mm:Product> . FILTER(?s != <urn:x>) } LIMIT 10",
+)
+# => { ok: true,
+#      plan: { kind: :select,
+#              projection: ["?s"],
+#              where: { kind: :bgp,
+#                       patterns: [["?s", "a", "<mm:Product>"]],
+#                       filters: [{ expression: "?s != <urn:x>" }] },
+#              modifiers: { order_by: nil, limit: 10, offset: nil,
+#                           group_by: nil, having: nil } },
+#      estimated_rows: :unknown,
+#      from: :gem_parser }
+```
+
+`estimated_rows: :unknown` is pinned for v0.17.0 — the engine
+has no cardinality estimator. When a future engine release ships
+`rdf_sparql_plan`, `from:` flips `:gem_parser` →
+`:engine_planner` by introspection and an integer populates.
+Never executes the query; unparseable forms refuse with
+`:sparql_parse_error`.
+
+### SHACL shapes loader — `Shacl.load_shapes` (v0.17.0)
+
+File-or-string SHACL shapes loader. Default scope
+`urn:vv-graph:shapes`. Idempotent — SHA-256 of the canonicalised
+input lives in `urn:vv-graph:shapes:meta`; matching hash returns
+`{ loaded: 0, reason: :unchanged }` without touching the shapes
+scope.
+
+```ruby
+Vv::Graph::Shacl.load_shapes("config/shapes/product.ttl")
+# => { ok: true, loaded: 18, scope: "urn:vv-graph:shapes" }
+
+Vv::Graph::Shacl.load_shapes(<<~TTL, format: :ttl)
+  @prefix sh: <http://www.w3.org/ns/shacl#> .
+  <urn:shapes:Product> a sh:NodeShape ; sh:targetClass <mm:Product> .
+TTL
+# => { ok: true, loaded: 2, scope: "urn:vv-graph:shapes" }
+```
+
+`format: :ttl` (default) routes through the engine's
+`rdf_load_turtle_to_graph`; `format: :nt` routes through
+`Sparql.execute("INSERT DATA …")` after a line-based normalise.
+Path-like strings (`.ttl`, `.nt`, `.n3`, `.rdf`, `.shapes`,
+`.shacl` suffix) are treated as file paths — a missing file
+refuses with `:shapes_file_missing` rather than handing the
+literal string to the engine.
+
 ## Concurrency
 
 Engine ≥ 0.2.0 holds one Oxigraph store per process, shared across
