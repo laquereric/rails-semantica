@@ -83,4 +83,43 @@ module Vv::Graph
               "#{content_kind.inspect} (known: #{CHECKPOINT_CONTENT_KINDS.inspect})"
     end
   end
+
+  # PLAN_0.16.0 Phase D — `Vv::Graph.schema_normalized?` capability
+  # predicate.
+  #
+  # Flips to true once `Vv::Graph::Loader.normalize_schema!` has
+  # populated the `:schema` graph for at least one prefix-target
+  # pair. Consumers asking "should I expect the :schema scope to
+  # carry OWL/RDFS axioms my reasoner can lean on?" check this
+  # instead of issuing an exploratory SPARQL probe.
+  #
+  #   Vv::Graph.schema_normalized?
+  #     # => false (default — :schema scope is empty)
+  #
+  #   Vv::Graph::Loader.normalize_schema!
+  #   Vv::Graph.schema_normalized?
+  #     # => true
+  #
+  #   Vv::Graph.schema_normalization_info
+  #     # => { schema_graph: "urn:vv-graph:schema",
+  #     #      iri_prefix:   "mm:" }
+  #     # or nil before the first normalize.
+  def schema_normalized?
+    !schema_normalization_info.nil?
+  end
+
+  def schema_normalization_info
+    @schema_normalization_info
+  end
+
+  # Loader-only entry point; not part of the operator-facing
+  # surface. Called from `Vv::Graph::Loader.normalize_schema!`
+  # after a successful emission.
+  def set_schema_normalized!(schema_graph:, iri_prefix:)
+    @schema_normalization_info = { schema_graph: schema_graph, iri_prefix: iri_prefix }.freeze
+  end
+
+  def reset_schema_normalization!
+    @schema_normalization_info = nil
+  end
 end

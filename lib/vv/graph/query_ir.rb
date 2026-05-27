@@ -42,18 +42,11 @@ module Vv::Graph
       validation = validate(ir_array)
       return validation unless validation == :ok
 
-      backend_key = backend || :sparql
-      backend_mod_thunk = BACKENDS[backend_key]
-      unless backend_mod_thunk
-        return {
-          ok: false,
-          reason: REASON_UNKNOWN_BACKEND,
-          because: "Vv::Graph::QueryIR.run: backend #{backend_key.inspect} is not registered " \
-                   "(known: #{BACKENDS.keys.inspect})"
-        }
-      end
+      pick = ::Vv::Graph::Backend::Router.pick(ir_array, hint: backend)
+      return pick unless pick[:ok]
 
-      backend_mod = backend_mod_thunk.call
+      backend_key = pick[:backend]
+      backend_mod = pick[:module]
       started = monotonic_now
       envelope = backend_mod.execute(ir_array, scope: scope)
       elapsed_ms = ((monotonic_now - started) * 1000.0).round(3)

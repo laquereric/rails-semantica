@@ -142,5 +142,159 @@ module Vv::Graph
     rescue StandardError
       ENGINE_VERSION_UNKNOWN
     end
+
+    # ── PLAN_0.16.0 Phase D — schema normalisation ───────────────
+
+    # Default IRI of the named graph that holds the emitted RDF
+    # schema mapping. Operators override via `schema_graph:`.
+    SCHEMA_GRAPH_DEFAULT = "urn:vv-graph:schema"
+
+    DEFAULT_EXCLUDED_TABLES = %w[
+      ar_internal_metadata
+      schema_migrations
+    ].freeze
+
+    # Tables matching these prefixes are auto-excluded. Operators
+    # who want them included pass `include: [...]` with the table
+    # names verbatim.
+    DEFAULT_EXCLUDED_PREFIXES = %w[active_storage_ action_text_].freeze
+
+    OWL_CLASS              = "<http://www.w3.org/2002/07/owl#Class>"
+    OWL_DATATYPE_PROPERTY  = "<http://www.w3.org/2002/07/owl#DatatypeProperty>"
+    OWL_OBJECT_PROPERTY    = "<http://www.w3.org/2002/07/owl#ObjectProperty>"
+    RDF_TYPE               = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"
+    RDFS_DOMAIN            = "<http://www.w3.org/2000/01/rdf-schema#domain>"
+    RDFS_RANGE             = "<http://www.w3.org/2000/01/rdf-schema#range>"
+
+    # Reads AR's schema and emits an RDF mapping into the :schema
+    # named graph. Idempotent: clears the schema graph before each
+    # call, so re-running converges on the current AR state.
+    #
+    #   Vv::Graph::Loader.normalize_schema!(
+    #     iri_prefix:   "mm:",
+    #     include:      nil,            # nil = all non-excluded tables
+    #     exclude:      [],             # extra tables to skip beyond the defaults
+    #     schema_graph: "urn:vv-graph:schema",
+    #   )
+    #   # => { ok: true, classes: N, datatype_properties: M,
+    #   #      object_properties: K, schema_graph: "urn:vv-graph:schema" }
+    #
+    # Emitted per AR class:
+    #   <prefix><Model> a owl:Class .
+    # Per column:
+    #   <prefix><Model>/<col> a owl:DatatypeProperty ;
+    #     rdfs:domain <prefix><Model> ;
+    #     rdfs:range  <xsd:type> .
+    # Per FK (column ending in `_id` with a known reflection):
+    #   <prefix><Model>/<col> a owl:ObjectProperty ;
+    #     rdfs:domain <prefix><Model> ;
+    #     rdfs:range  <prefix><TargetModel> .
+    def normalize_schema!(iri_prefix: nil, include: nil, exclude: [], schema_graph: SCHEMA_GRAPH_DEFAULT)
+      unless defined?(::ActiveRecord::Base) && defined?(::Vv::Graph::Sparql)
+        return { ok: false, reason: :ar_not_loaded,
+                 because: "Vv::Graph::Loader.normalize_schema!: ActiveRecord / Vv::Graph::Sparql not loaded" }
+      end
+
+      prefix = iri_prefix || ::Vv::Graph::Schema.iri_prefix
+      connection = ::ActiveRecord::Base.connection
+      tables = select_tables(connection, include: include, exclude: exclude)
+
+      ::Vv::Graph::Sparql.execute("CLEAR GRAPH <#{schema_graph}>")
+
+      stats = { classes: 0, datatype_properties: 0, object_properties: 0 }
+      tables.each do |table|
+        model = model_for_table(table)
+        emit_class(schema_graph, prefix, model)
+        stats[:classes] += 1
+
+        connection.columns(table).each do |column|
+          if (ref = ar_reflection_for_column(table, column.name))
+            emit_object_property(schema_graph, prefix, model, column.name, ref)
+            stats[:object_properties] += 1
+          else
+            emit_datatype_property(schema_graph, prefix, model, column.name, column.type)
+            stats[:datatype_properties] += 1
+          end
+        end
+      end
+
+      ::Vv::Graph.send(:set_schema_normalized!, schema_graph: schema_graph, iri_prefix: prefix)
+
+      stats.merge(ok: true, schema_graph: schema_graph)
+    end
+
+    # ── private-by-convention helpers ────────────────────────────
+
+    def select_tables(connection, include:, exclude:)
+      all = connection.tables
+      excluded = (DEFAULT_EXCLUDED_TABLES + Array(exclude)).map(&:to_s)
+      kept = all.reject do |t|
+        excluded.include?(t) || DEFAULT_EXCLUDED_PREFIXES.any? { |p| t.start_with?(p) }
+      end
+      include ? kept & Array(include).map(&:to_s) : kept
+    end
+
+    def model_for_table(table)
+      table.classify
+    end
+
+    def ar_reflection_for_column(table, column_name)
+      return nil unless column_name.end_with?("_id")
+      target = column_name.sub(/_id\z/, "").classify
+      return nil unless Object.const_defined?(target)
+      const = Object.const_get(target)
+      const if const.is_a?(Class) && const < ::ActiveRecord::Base
+    rescue NameError
+      nil
+    end
+
+    def emit_class(graph, prefix, model)
+      iri = "<#{prefix}#{model}>"
+      ::Vv::Graph::Sparql.execute("INSERT DATA { #{iri} #{RDF_TYPE} #{OWL_CLASS} . }", graph: graph)
+    end
+
+    def emit_datatype_property(graph, prefix, model, column, column_type)
+      iri = "<#{prefix}#{model}/#{column}>"
+      domain = "<#{prefix}#{model}>"
+      range = xsd_iri_for(column_type)
+      ::Vv::Graph::Sparql.execute(<<~SPARQL, graph: graph)
+        INSERT DATA {
+          #{iri} #{RDF_TYPE}    #{OWL_DATATYPE_PROPERTY} .
+          #{iri} #{RDFS_DOMAIN} #{domain} .
+          #{iri} #{RDFS_RANGE}  #{range} .
+        }
+      SPARQL
+    end
+
+    def emit_object_property(graph, prefix, model, column, target_class)
+      iri = "<#{prefix}#{model}/#{column}>"
+      domain = "<#{prefix}#{model}>"
+      range  = "<#{prefix}#{target_class.name}>"
+      ::Vv::Graph::Sparql.execute(<<~SPARQL, graph: graph)
+        INSERT DATA {
+          #{iri} #{RDF_TYPE}    #{OWL_OBJECT_PROPERTY} .
+          #{iri} #{RDFS_DOMAIN} #{domain} .
+          #{iri} #{RDFS_RANGE}  #{range} .
+        }
+      SPARQL
+    end
+
+    AR_TYPE_TO_XSD_IRI = {
+      string:   "<http://www.w3.org/2001/XMLSchema#string>",
+      text:     "<http://www.w3.org/2001/XMLSchema#string>",
+      integer:  "<http://www.w3.org/2001/XMLSchema#integer>",
+      bigint:   "<http://www.w3.org/2001/XMLSchema#integer>",
+      float:    "<http://www.w3.org/2001/XMLSchema#double>",
+      decimal:  "<http://www.w3.org/2001/XMLSchema#decimal>",
+      boolean:  "<http://www.w3.org/2001/XMLSchema#boolean>",
+      date:     "<http://www.w3.org/2001/XMLSchema#date>",
+      datetime: "<http://www.w3.org/2001/XMLSchema#dateTime>",
+      time:     "<http://www.w3.org/2001/XMLSchema#time>",
+      binary:   "<http://www.w3.org/2001/XMLSchema#base64Binary>"
+    }.freeze
+
+    def xsd_iri_for(ar_type)
+      AR_TYPE_TO_XSD_IRI[ar_type.to_sym] || "<http://www.w3.org/2001/XMLSchema#string>"
+    end
   end
 end

@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- **PLAN_0.16.0 Phase D — `Vv::Graph::Loader.normalize_schema!`
+  + `Vv::Graph.schema_normalized?` capability predicate.**
+  Reads AR's `connection.tables` + `connection.columns` +
+  `_id`-named FK reflections and emits a deterministic RDF
+  mapping into the `:schema` named graph (default
+  `urn:vv-graph:schema`). Per AR class: `mm:Model a owl:Class`.
+  Per plain column: `mm:Model/col a owl:DatatypeProperty ;
+  rdfs:domain mm:Model ; rdfs:range <xsd:type>`. Per FK column:
+  `mm:Model/col a owl:ObjectProperty ; rdfs:domain mm:Model ;
+  rdfs:range mm:Target`. Idempotent — `CLEAR GRAPH` runs first
+  so re-running converges. Default-excluded tables:
+  `ar_internal_metadata`, `schema_migrations`,
+  `active_storage_*`, `action_text_*`. Operators override the
+  prefix / include-list / exclude-list / schema-graph IRI per
+  call. `Vv::Graph.schema_normalized?` flips true after the
+  first successful normalize; `Vv::Graph::Schema.field`'s
+  `supports_closure:` follows. Satisfies CR-GM asks #3 + #4.
+- **PLAN_0.16.0 Phase C — capability-aware backend router +
+  env override.** `Vv::Graph::Backend::Router.pick(ir, hint:)`
+  picks the backend via the four-layer precedence pinned by
+  PLAN_0.16.0: explicit hint > env override
+  (`VV_GRAPH_QUERY_BACKEND`) > capability fit (when one backend
+  cannot serve the IR) > configured default
+  (`Vv::Graph.config.default_query_backend`, default `:sparql`).
+  `:backend_missing_capability` refusal when neither backend
+  has the required capability; the envelope carries
+  `missing:` and `available_backends:`. New
+  `Vv::Graph::Config` module with the routing knobs. `QueryIR.run`
+  now consults the Router instead of selecting the SPARQL
+  backend unconditionally.
 - **PLAN_0.16.0 Phase B — `Vv::Graph::Backend::Relational` +
   Schema AR introspection + parity harness.** Second backend
   lowering the same IR to ActiveRecord scopes. `Find` →

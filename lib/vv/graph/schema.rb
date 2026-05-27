@@ -33,7 +33,15 @@ module Vv::Graph
 
     class << self
       def iri_prefix
-        @iri_prefix ||= DEFAULT_IRI_PREFIX
+        # When schema normalization has run, its captured prefix
+        # wins — the :schema scope's triples were emitted with
+        # that prefix, so all downstream Schema.field() lookups
+        # must align. Operator-set `iri_prefix=` still takes
+        # precedence (it's a deliberate override).
+        return @iri_prefix if @iri_prefix
+        info = ::Vv::Graph.schema_normalization_info
+        return info[:iri_prefix] if info && info[:iri_prefix]
+        DEFAULT_IRI_PREFIX
       end
 
       def iri_prefix=(prefix)
@@ -75,7 +83,11 @@ module Vv::Graph
           iri: default_iri_for(model: model, name: name),
           ar_column: ar_info[:ar_column],
           xsd: ar_info[:xsd],
-          supports_closure: false
+          # Phase D minimal: supports_closure flips on once the
+          # :schema scope has been populated. Operators with a live
+          # reasoner pass should expect derived axioms (subclass /
+          # subproperty walks etc.) to apply to this field.
+          supports_closure: ::Vv::Graph.schema_normalized?
         }
         defaults.merge(overrides.fetch(key, {}))
       end
