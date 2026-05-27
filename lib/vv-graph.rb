@@ -29,4 +29,8 @@ require_relative "vv/graph/reasoner"
 require_relative "vv/graph/shacl"
 require_relative "vv/graph/shacl/rules"
 require_relative "vv/graph/capabilities"
+require_relative "vv/graph/schema"
+require_relative "vv/graph/backend"
+require_relative "vv/graph/backend/sparql"
+require_relative "vv/graph/query_ir"
 require_relative "vv/graph/railtie" if defined?(::Rails::Railtie)

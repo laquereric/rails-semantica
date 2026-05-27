@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **PLAN_0.16.0 Phase A — `Vv::Graph::QueryIR` algebra + SPARQL
+  backend.** A small frozen query algebra (`Find`, `Filter`,
+  `FilterRange`, `FilterIn`, `Sort`, `Limit`, `Project`, `Count`,
+  `Compare`) lowered by `Vv::Graph::Backend::Sparql` to the
+  existing SPARQL facade. New entry point
+  `Vv::Graph::QueryIR.run(ir, scope:, backend: nil, with_meta: false)`.
+  Pinned refusal symbols: `:ir_invalid`, `:schema_field_unknown`,
+  `:backend_missing_capability`, `:unknown_backend`. Minimal
+  `Vv::Graph::Schema` adapter (prefix-based field → IRI
+  resolution; AR introspection + `:schema` scope reads come in
+  Phase B/D). The existing `Vv::Graph::Sparql.{select,ask,construct,execute}`
+  facade is untouched; QueryIR is purely additive. Phase A always
+  picks the SPARQL backend (router lands in Phase C).
 - **Engine floor bumped to `sqlite-sparql ≥ 0.9.1`.** No live gem
   code changes — the Phase-B materialise loops in
   `Vv::Graph::Reasoner` / `Vv::Graph::Shacl` /
