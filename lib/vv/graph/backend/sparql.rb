@@ -59,7 +59,7 @@ module Vv::Graph
           query = compile_select(ir)
           env = ::Vv::Graph::Sparql.select(query, graph: scope)
           return env.merge(from: :sparql, query: query) unless env[:ok]
-          { ok: true, results: env[:results], from: :sparql, query: query }
+          { ok: true, results: unwrap_rows(env[:results]), from: :sparql, query: query }
         end
 
         def execute_count(ir, scope:)
@@ -67,7 +67,8 @@ module Vv::Graph
           env = ::Vv::Graph::Sparql.select(query, graph: scope)
           return env.merge(from: :sparql, query: query) unless env[:ok]
           row = env[:results].first || {}
-          count = (row["count"] || row[:count] || 0).to_i
+          raw = row["count"] || row[:count] || 0
+          count = unwrap_literal(raw).to_i
           { ok: true, count: count, from: :sparql, query: query }
         end
 
@@ -81,8 +82,8 @@ module Vv::Graph
           right_env = ::Vv::Graph::Sparql.select(right, graph: scope)
           return right_env.merge(from: :sparql) unless right_env[:ok]
 
-          left_val  = (left_env[:results].first  || {}).then { |r| r["val"] || r[:val] }
-          right_val = (right_env[:results].first || {}).then { |r| r["val"] || r[:val] }
+          left_val  = unwrap_literal((left_env[:results].first  || {}).then { |r| r["val"] || r[:val] })
+          right_val = unwrap_literal((right_env[:results].first || {}).then { |r| r["val"] || r[:val] })
 
           {
             ok: true,
@@ -227,6 +228,60 @@ module Vv::Graph
           str = raw.to_s
           return str if str.start_with?("<")
           "<#{str}>"
+        end
+
+        # Unwrap each cell of an SPARQL result row into a plain Ruby
+        # value. Strips N-triples literal quoting + typed-literal
+        # tails so results align with the Relational backend.
+        def unwrap_rows(rows)
+          rows.map { |row| row.transform_values { |v| unwrap_literal(v) } }
+        end
+
+        # Engine returns literals as N-triples-ish strings:
+        #   "Alpha"               → "Alpha"
+        #   "2"^^<...integer>     → 2
+        #   "3.14"^^<...double>   → 3.14
+        #   "true"^^<...boolean>  → true
+        #   <urn:x>               → "urn:x" (bracket-stripped IRI)
+        #   "2026-05-27T...Z"^^<...dateTime> → kept as string for parity
+        def unwrap_literal(raw)
+          return raw unless raw.is_a?(String)
+          # IRI form
+          if raw.start_with?("<") && raw.end_with?(">")
+            return raw[1..-2]
+          end
+          # Typed-literal form: "value"^^<datatype>
+          if (m = raw.match(/\A"((?:[^"\\]|\\.)*)"\^\^<([^>]+)>\z/))
+            value = m[1].gsub(/\\(.)/, '\1')
+            datatype = m[2]
+            return coerce_literal(value, datatype)
+          end
+          # Plain string literal: "..."
+          if raw.start_with?('"') && raw.end_with?('"')
+            return raw[1..-2].gsub(/\\(.)/, '\1')
+          end
+          raw
+        end
+
+        XSD_NS = "http://www.w3.org/2001/XMLSchema#"
+
+        def coerce_literal(value, datatype)
+          return value unless datatype.start_with?(XSD_NS)
+          case datatype.sub(XSD_NS, "")
+          when "integer", "int", "long", "short", "byte",
+               "nonNegativeInteger", "nonPositiveInteger",
+               "positiveInteger", "negativeInteger",
+               "unsignedLong", "unsignedInt", "unsignedShort", "unsignedByte"
+            Integer(value)
+          when "double", "float", "decimal"
+            Float(value)
+          when "boolean"
+            value == "true"
+          else
+            value
+          end
+        rescue ArgumentError, TypeError
+          value
         end
 
         # SPARQL term serialisation. Strings literal-quoted; numerics

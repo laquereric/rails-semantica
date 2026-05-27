@@ -32,5 +32,6 @@ require_relative "vv/graph/capabilities"
 require_relative "vv/graph/schema"
 require_relative "vv/graph/backend"
 require_relative "vv/graph/backend/sparql"
+require_relative "vv/graph/backend/relational"
 require_relative "vv/graph/query_ir"
 require_relative "vv/graph/railtie" if defined?(::Rails::Railtie)

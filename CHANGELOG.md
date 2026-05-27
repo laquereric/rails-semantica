@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **PLAN_0.16.0 Phase B — `Vv::Graph::Backend::Relational` +
+  Schema AR introspection + parity harness.** Second backend
+  lowering the same IR to ActiveRecord scopes. `Find` →
+  `Klass.all`, `Filter` → `.where` / `.where.not`, `FilterRange`
+  → `.where(col => lo..hi)` (inclusive-on-both-ends matching the
+  SPARQL backend even in exclusive mode), `FilterIn` →
+  `.where(col => values)`, `Sort` / `Limit` / `Project`
+  (→ `.pluck`), `Count`, `Compare` (two `find_by` calls).
+  Result rows align with SPARQL backend's shape — string-keyed
+  hashes with `"s"` carrying the row identifier. Capability map
+  per plan: `owl_closure: false`, `shacl: false`, `joins: :ar`,
+  `named_graphs: false`. New refusal symbols: `:ar_not_loaded`,
+  `:model_unknown`, `:ar_query_error`. `Vv::Graph::Schema.field`
+  now reads AR `connection.columns` to populate `ar_column:`
+  and `xsd:`; the prefix-based defaults stay for non-AR call
+  sites. SPARQL backend's `unwrap_literal` strips N-triples
+  literal quoting + typed-literal tails so both backends return
+  plain Ruby values (Integer, Float, Boolean, String). New
+  parity harness `spec/parity/query_ir_parity_spec.rb` runs
+  representative IR programs through both backends and asserts
+  row-identity after projection / sort.
 - **PLAN_0.16.0 Phase A — `Vv::Graph::QueryIR` algebra + SPARQL
   backend.** A small frozen query algebra (`Find`, `Filter`,
   `FilterRange`, `FilterIn`, `Sort`, `Limit`, `Project`, `Count`,

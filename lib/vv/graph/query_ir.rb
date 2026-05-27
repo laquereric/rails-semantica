@@ -31,8 +31,8 @@ module Vv::Graph
     REASON_UNKNOWN_BACKEND             = :unknown_backend
 
     BACKENDS = {
-      sparql: -> { ::Vv::Graph::Backend::Sparql }
-      # :relational lands in Phase B.
+      sparql:     -> { ::Vv::Graph::Backend::Sparql },
+      relational: -> { ::Vv::Graph::Backend::Relational }
     }.freeze
 
     module_function
