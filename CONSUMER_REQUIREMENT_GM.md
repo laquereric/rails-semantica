@@ -252,7 +252,36 @@ the SPARQL-vs-AR decision based on estimated cost, not heuristics.
 subclass-aware, type-typed) to SPARQL and lowers all "exact-match
 indexed-column" queries to AR. The cost-aware path is deferred.
 
-### 3. **SQL schema normalization on boot.** ⭐ *Headline ask.*
+### 3. **SQL schema normalization on boot.** ⭐ *Headline ask.* — **LANDED in 0.16.0 (Phase D)**
+
+Live as `Vv::Graph::Loader.normalize_schema!(iri_prefix:, include:,
+exclude:, schema_graph:)`. Emits the deterministic RDF mapping
+below into the `:schema` named graph (default
+`urn:vv-graph:schema`). Idempotent (CLEAR GRAPH runs first).
+Default-excluded: `ar_internal_metadata`, `schema_migrations`,
+`active_storage_*`, `action_text_*`. Return envelope:
+`{ ok: true, classes:, datatype_properties:, object_properties:,
+schema_graph: }`. Two notes on how the landed shape differs from
+the original ask:
+
+- **No `iri_separator:` knob in 0.16.0.** The separator is
+  hard-coded as `/`. Revisit on operator signal — the field-IRI
+  convention `<prefix><Model>/<column>` is a published contract
+  the moment a downstream lowerer reads from `:schema`.
+- **No `xsd_mapping:` override.** The default mapping ships
+  hard-coded (`AR_TYPE_TO_XSD_IRI`); operators wanting a
+  different `xsd:dateTime`-shape register a `Schema.override(
+  model:, name:, xsd: …)` per field rather than swapping the
+  whole table. Revisit if the per-field shape proves too granular.
+- **`rdfs:label` triples not emitted.** Tables and columns are
+  typed but not labelled. Revisit on a grammar that needs the
+  display string.
+
+See `docs/plans/PLAN_0.16.0.md` Phase D and
+`lib/vv/graph/loader.rb` (`normalize_schema!`) for the full
+contract. Original ask preserved below for historical context.
+
+---
 
 **Today.** vv-graph's loader probes the extension, then idles. The AR
 schema (`ActiveRecord::Base.connection.tables` + column types + FKs)
@@ -327,7 +356,17 @@ of triples for a substrate-sized schema).
 `InventoryDbQueryLowerer::FIELD_IRI_MAP` etc. per lowerer.
 PLAN_0_1_0 Phase F deletes those maps the day this ships.
 
-### 4. Capability predicate: `Vv::Graph.schema_normalized?`
+### 4. Capability predicate: `Vv::Graph.schema_normalized?` — **LANDED in 0.16.0 (Phase D)**
+
+Live. Flips to `true` after the first successful
+`Vv::Graph::Loader.normalize_schema!`. Pairs with a richer
+introspection accessor `Vv::Graph.schema_normalization_info →
+{ schema_graph:, iri_prefix: }` for consumers needing the
+captured graph IRI / prefix. Behaviour matches the original ask
+shape verbatim. Original ask preserved below for historical
+context.
+
+---
 
 Pairs with ask #3. GM's lowerers want to ask "is the schema scope
 populated?" without parsing version strings or counting triples:

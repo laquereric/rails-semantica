@@ -1,6 +1,6 @@
 # PLAN_0.16.0 — vv-graph: QueryIR, storage backends, capability router
 
-**Status.** Draft.
+**Status.** Shipped (Phases A/B/C/D landed; see `CHANGELOG.md` § 0.16.0).
 **Target gem version.** `vv-graph` v0.16.0.
 **Author.** Architect (Eric).
 **Date.** 2026-05-26.

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.16.0 — 2026-05-27
 
 - **PLAN_0.16.0 Phase D — `Vv::Graph::Loader.normalize_schema!`
   + `Vv::Graph.schema_normalized?` capability predicate.**
