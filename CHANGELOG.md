@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.18.0
+
+- **PLAN_0.18.0 — `Loader.absolute_for` walks up to the first
+  match (CR-VVZ B1).** The pre-fix resolver did a single-level
+  `Rails.root.parent` walk, which landed short of
+  `vendor/sqlite-sparql/` when vv-graph was loaded under
+  Combustion (a deep `spec/internal` `Rails.root`). The resolver
+  now starts at `Rails.root` (or `Dir.pwd` without Rails) and
+  walks upward, returning the first ancestor where the relative
+  candidate exists on disk. When nothing matches it falls back to
+  the start-dir-relative path, so `ExtensionMissing` still names
+  a concrete location. `VV_GRAPH_SQLITE_SPARQL_PATH` precedence
+  unchanged. Closes CR-VVZ B1; the VVZ-side
+  `ExtensionPath.resolve_and_export!` workaround can retire.
 
 - **PLAN_0.11.0 Phase B — `Vv::Graph::Reasoner.materialise_incremental!`
   (DRed over RDF-star `:derivedFrom` annotations).** Incremental

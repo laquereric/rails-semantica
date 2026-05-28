@@ -86,11 +86,50 @@ RSpec.describe Vv::Graph::Loader do
     end
   end
 
+  describe ".walk_up_for" do
+    # PLAN_0.18.0 — CR-VVZ B1. Combustion mounts the engine under a
+    # deep spec/internal subtree; the resolver has to walk past the
+    # single-level Rails.root.parent shim to find the binary.
+    it "returns the first ancestor where the relative path exists" do
+      root = File.join(tmp_dir, "substrate")
+      target_rel = "vendor/sqlite-sparql/libsqlite_sparql.dylib"
+      target_abs = File.join(root, target_rel)
+      FileUtils.mkdir_p(File.dirname(target_abs))
+      File.write(target_abs, "stub")
+
+      deep_start = File.join(root, "vendor/vv-visualize/spec/internal")
+      FileUtils.mkdir_p(deep_start)
+
+      expect(Vv::Graph::Loader.walk_up_for(target_rel, deep_start))
+        .to eq(target_abs)
+    end
+
+    it "matches at the start dir without walking when the target is already local" do
+      FileUtils.mkdir_p(File.join(tmp_dir, "vendor/sqlite-sparql"))
+      target = File.join(tmp_dir, "vendor/sqlite-sparql/libsqlite_sparql.dylib")
+      File.write(target, "stub")
+
+      expect(Vv::Graph::Loader.walk_up_for("vendor/sqlite-sparql/libsqlite_sparql.dylib", tmp_dir))
+        .to eq(target)
+    end
+
+    it "returns the start-dir-relative path when no ancestor matches" do
+      start = File.join(tmp_dir, "a/b/c")
+      FileUtils.mkdir_p(start)
+      result = Vv::Graph::Loader.walk_up_for("vendor/sqlite-sparql/libsqlite_sparql.dylib", start)
+      expect(result).to eq(File.expand_path("vendor/sqlite-sparql/libsqlite_sparql.dylib", start))
+    end
+  end
+
   describe ".ensure_extension_loaded!" do
     around do |example|
       saved_env = ENV["VV_GRAPH_SQLITE_SPARQL_PATH"]
       ENV["VV_GRAPH_SQLITE_SPARQL_PATH"] = "/tmp/definitely-missing-#{SecureRandom.hex(8)}.dylib"
-      example.run
+      # PLAN_0.18.0 — the walk-up resolver finds ancestor-built
+      # binaries (which is the point of CR-VVZ B1). Sandbox cwd so
+      # this "nothing on disk" test stays honest under a substrate
+      # whose ancestor *does* ship a built dylib.
+      Dir.chdir(tmp_dir) { example.run }
       ENV["VV_GRAPH_SQLITE_SPARQL_PATH"] = saved_env
     end
 

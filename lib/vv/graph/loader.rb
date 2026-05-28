@@ -96,13 +96,30 @@ module Vv::Graph
       DEFAULT_PATHS.map { |p| absolute_for(p) }
     end
 
+    # PLAN_0.18.0 — walk-up resolver (CR-VVZ B1). Combustion mounts
+    # the engine under spec/internal, so the original single-level
+    # `Rails.root.parent` walk landed short of `vendor/sqlite-sparql/`.
+    # Walk upward to the first level where `relative` exists; if
+    # nothing matches, return the start-dir-relative path so the
+    # `ExtensionMissing` message still names a concrete location.
     def absolute_for(relative)
-      base = if defined?(::Rails) && ::Rails.respond_to?(:root) && ::Rails.root
-        ::Rails.root.parent.to_s
+      start = if defined?(::Rails) && ::Rails.respond_to?(:root) && ::Rails.root
+        ::Rails.root.to_s
       else
         Dir.pwd
       end
-      File.expand_path(relative, base)
+      walk_up_for(relative, start)
+    end
+
+    def walk_up_for(relative, start)
+      dir = start
+      loop do
+        candidate = File.expand_path(relative, dir)
+        return candidate if File.exist?(candidate)
+        parent = File.expand_path("..", dir)
+        return File.expand_path(relative, start) if parent == dir
+        dir = parent
+      end
     end
 
     # Loads the extension into a single AR connection. Idempotent —
