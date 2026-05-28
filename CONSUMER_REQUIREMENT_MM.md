@@ -182,6 +182,37 @@ PLAN_0.6.0 (v0.6.0) pinned the shared-store contract MM relies on:
   process-wide store; MM's RSpec config doesn't enable parallel
   workers for the same reason.
 
+## Role in the substrate fast path (PLAN_0_93_2)
+
+`docs/plans/PLAN_0_93_2.md` (the fast path from slow Ruby to fast Rust and
+faster browser WASM) pins where this gem sits in the substrate's
+read/write split. MM consumes `vv-graph` as the **governed writer**, not
+the hot-query path:
+
+- **Write tier (what MM relies on `vv-graph` for).** Ruby owns
+  routing/auth/policy and the governed write gate; MM's `Storable`
+  lifecycle hooks and `Sparql.execute` calls are how the substrate appends
+  domain events / writes governed triples. "Slow" is acceptable here —
+  governance, not throughput, is the job.
+- **Not the hot-query / compute path.** Per the plan, hot SPARQL, OWL-RL
+  materialisation, SHACL validation, and vector kNN migrate off Ruby onto
+  a co-located Rust worker (over `sqlite-sparql` + `sqlite-vec`) and onto
+  browser-WASM replicas. MM does **not** pin `vv-graph` as the tier that
+  answers those hot reads; the gem stays the Ruby governed-write facade.
+- **RES is the shared truth, not the SQLite file.** Oxigraph runs one
+  in-memory store per process (`sqlite-sparql` architecture note), so two
+  processes opening the same file get two independent graphs. The shared
+  truth is the Rails Event Store log; each tier *projects* those events
+  into its own store. `vv-graph`'s `Sparql` / `Storable` surface is
+  therefore the per-process Ruby projection's governed writer — it neither
+  shares its graph with the Rust or browser tiers through the file, nor
+  does MM expect it to.
+
+This is a positioning note, not new pinned surface: the four-method
+facade, `Storable`, and `EtherealGraph` contracts above are unchanged.
+Building the Rust tail / browser replica is PLAN_0_93_2's own acceptance,
+not a `vv-graph` obligation.
+
 ## Drift signals
 
 A drift between this file and the gem's behaviour is detectable in these
@@ -476,4 +507,8 @@ For questions about MM's consumption pattern, see MM's
 
 ## Last reviewed
 
-2026-05-25 against MM substrate commit `e66aa9d` per `docs/plans/PLAN_0_91_0.md` (Phase A).
+2026-05-28 — reconciled against `docs/plans/PLAN_0_93_2.md` +
+`docs/plans/PLAN_0_93_3.md` §1 (fast-path positioning: governed writer,
+not the hot-query path). MM stamps the pin-bump commit lockstep on its
+side. Prior review: 2026-05-25 against MM substrate commit `e66aa9d` per
+`docs/plans/PLAN_0_91_0.md` (Phase A).
