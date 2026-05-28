@@ -518,6 +518,16 @@ Vv::Graph.checkpoint_can_round_trip?(content_kind: :ntriples_star)
 
 Vv::Graph.checkpoint_can_round_trip?(content_kind: :nope)
 # => raises ArgumentError naming the known content_kinds
+
+# v0.19.0 — predicate over the SPARQL facade methods. Lets a
+# consumer (e.g. vv-visualize's tool catalogue) filter on
+# backing-method availability without reaching into
+# Vv::Graph::Sparql.respond_to? from consumer code.
+Vv::Graph.sparql_method_available?(:select)    # => true
+Vv::Graph.sparql_method_available?(:ask)       # => true
+Vv::Graph.sparql_method_available?(:construct) # => true
+Vv::Graph.sparql_method_available?(:execute)   # => true
+Vv::Graph.sparql_method_available?(:nope)      # => false
 ```
 
 `Vv::Graph.schema_normalized?` lands in v0.16.0 — see the
@@ -659,6 +669,31 @@ Path-like strings (`.ttl`, `.nt`, `.n3`, `.rdf`, `.shapes`,
 `.shacl` suffix) are treated as file paths — a missing file
 refuses with `:shapes_file_missing` rather than handing the
 literal string to the engine.
+
+### Extension path resolution under Combustion (v0.18.0)
+
+`Vv::Graph::Loader.extension_path` resolves the sqlite-sparql binary
+via a **walk-up-to-first-match** from `Rails.root` (or `Dir.pwd`
+when Rails isn't loaded). The pre-v0.18.0 resolver did a single-level
+`Rails.root.parent` walk, which landed one directory short of
+`vendor/sqlite-sparql/` under Combustion (where `Rails.root` is a
+deep `spec/internal` subtree of the gem under test).
+
+```ruby
+# Precedence (unchanged): env var wins if set + on disk.
+ENV["VV_GRAPH_SQLITE_SPARQL_PATH"] = "/path/to/libsqlite_sparql.dylib"
+
+# Otherwise: walk upward from Rails.root (or Dir.pwd) until
+# `vendor/sqlite-sparql/target/release/libsqlite_sparql.{dylib,so,dll}`
+# exists. Falls back to the start-dir-relative path when nothing
+# matches, so `ExtensionMissing` still names a concrete location.
+Vv::Graph::Loader.extension_path
+# => "/abs/path/to/substrate/vendor/sqlite-sparql/target/release/libsqlite_sparql.dylib"
+```
+
+Consumer gems running specs under Combustion (e.g. `vv-visualize`)
+can drop their `VV_GRAPH_SQLITE_SPARQL_PATH` resolve-and-export
+workarounds once they pin `vv-graph >= 0.18`.
 
 ## Concurrency
 
