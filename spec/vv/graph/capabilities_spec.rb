@@ -55,4 +55,23 @@ RSpec.describe Vv::Graph, "capability predicates (Phase A)" do
       expect(Vv::Graph::CHECKPOINT_CONTENT_KINDS).to eq(%i[plain_ntriples ntriples_star])
     end
   end
+
+  describe ".sparql_method_available?" do
+    # PLAN_0.19.0 — CR-VVZ B2. Predicate over the SPARQL facade so
+    # VVZ's tool catalogue can filter without reaching into
+    # Sparql.respond_to? from consumer code.
+    %i[select ask construct execute].each do |name|
+      it "returns true for the four-method facade entry :#{name}" do
+        expect(described_class.sparql_method_available?(name)).to be(true)
+      end
+    end
+
+    it "accepts String input (coerced via to_sym)" do
+      expect(described_class.sparql_method_available?("select")).to be(true)
+    end
+
+    it "returns false for an unknown facade method" do
+      expect(described_class.sparql_method_available?(:nope_not_a_method)).to be(false)
+    end
+  end
 end

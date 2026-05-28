@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.19.0
+
+- **PLAN_0.19.0 — `Vv::Graph.sparql_method_available?(name)`
+  (CR-VVZ B2).** New capability predicate. Returns `true` if the
+  named symbol/string is a method on the SPARQL facade,
+  `false` otherwise. Pinned `true` for `:select`, `:ask`,
+  `:construct`, `:execute` at v0.19.0. Lets VVZ's tool
+  catalogue filter on backing-method availability without
+  reaching into `Vv::Graph::Sparql.respond_to?` from consumer
+  code. Sibling to the existing `rdf_star_writes_enabled?` /
+  `checkpoint_can_round_trip?` / `schema_normalized?`
+  predicates on `Vv::Graph`. Closes CR-VVZ B2.
+
 ## 0.18.0
 
 - **PLAN_0.18.0 — `Loader.absolute_for` walks up to the first

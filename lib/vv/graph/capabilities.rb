@@ -84,6 +84,26 @@ module Vv::Graph
     end
   end
 
+  # PLAN_0.19.0 — `Vv::Graph.sparql_method_available?(name)` (CR-VVZ B2).
+  #
+  # Predicate-shaped advertisement of which SPARQL facade methods
+  # are reachable. Lets VVZ's tool catalogue filter on backing-method
+  # availability without consumers introspecting
+  # `Vv::Graph::Sparql.respond_to?(...)` directly.
+  #
+  #   Vv::Graph.sparql_method_available?(:select)    # => true
+  #   Vv::Graph.sparql_method_available?(:ask)       # => true
+  #   Vv::Graph.sparql_method_available?(:construct) # => true
+  #   Vv::Graph.sparql_method_available?(:execute)   # => true
+  #
+  # Pinned `true` for the four-method facade at v0.19.0. Returns
+  # `false` for any other name. The predicate exists so consumers
+  # have a stable surface to branch on if/when the facade ever
+  # splits (e.g. a read-only build that drops `execute`).
+  def sparql_method_available?(name)
+    ::Vv::Graph::Sparql.respond_to?(name.to_sym)
+  end
+
   # PLAN_0.16.0 Phase D — `Vv::Graph.schema_normalized?` capability
   # predicate.
   #

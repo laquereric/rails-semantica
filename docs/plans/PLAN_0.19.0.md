@@ -1,8 +1,7 @@
 # PLAN_0.19.0 — vv-graph: Capabilities predicate for SPARQL facade methods (CR-VVZ B2)
 
-**Status.** Draft. Deferred from v0.18.0 per maintainer decision
-("B1 alone — Plan B2"). Not yet scheduled.
-**Target gem version.** `vv-graph` v0.19.0 (tentative).
+**Status.** Shipped (vv-graph v0.19.0; see `CHANGELOG.md` § 0.19.0).
+**Target gem version.** `vv-graph` v0.19.0.
 **Driving CR.** `CONSUMER_REQUIREMENT_VVZ.md` § B2.
 **Sibling shipped.** `PLAN_0.18.0.md` (CR-VVZ B1, walk-up resolver).
 
@@ -35,12 +34,15 @@ substrate gains an opt-in `construct` flag.
 ## Scope
 
 In:
-- Add `Vv::Graph::Capabilities.sparql_method_available?(name)`
-  to `lib/vv/graph/capabilities.rb`. Module function, accepts a
+- Add `Vv::Graph.sparql_method_available?(name)` to
+  `lib/vv/graph/capabilities.rb`. Module function on `Vv::Graph`
+  (matching the existing predicate siblings — the CR's
+  `Vv::Graph::Capabilities` namespace doesn't actually exist; the
+  predicates live directly on the top-level module). Accepts a
   Symbol or String, returns boolean.
 - Implementation: `::Vv::Graph::Sparql.respond_to?(name.to_sym)`,
-  with the call kept inside the Capabilities module so the consumer
-  doesn't reach into the facade itself.
+  with the call kept inside the predicate so the consumer doesn't
+  reach into the facade itself.
 - Spec coverage in `spec/vv/graph/capabilities_spec.rb`: each of
   `:select`, `:ask`, `:construct`, `:execute` returns `true` on
   the current facade; `:bogus_unknown` returns `false`.
@@ -84,15 +86,13 @@ name aligns with the existing sibling predicates:
 
 ```ruby
 module Vv::Graph
-  module Capabilities
-    module_function
+  module_function
 
-    # Pinned true for the four-method facade as of v0.19.0.
-    # The predicate exists so consumers can branch on a future
-    # facade split without introspecting Sparql.respond_to?.
-    def sparql_method_available?(name)
-      ::Vv::Graph::Sparql.respond_to?(name.to_sym)
-    end
+  # Pinned true for the four-method facade as of v0.19.0.
+  # The predicate exists so consumers can branch on a future
+  # facade split without introspecting Sparql.respond_to?.
+  def sparql_method_available?(name)
+    ::Vv::Graph::Sparql.respond_to?(name.to_sym)
   end
 end
 ```
@@ -108,7 +108,7 @@ as every other Capabilities predicate.
   with the new examples added.
 - `bundle exec rspec` — green (full suite still 495+ examples).
 - VVZ-side: `Vv::Visualize::Tools.catalogue` can filter on
-  `Vv::Graph::Capabilities.sparql_method_available?(tool.backing_method)`
+  `Vv::Graph.sparql_method_available?(tool.backing_method)`
   without touching `Vv::Graph::Sparql.respond_to?` directly.
 - VVZ CR B2 status flips from "nice-to-have" to shipped.
 

@@ -189,10 +189,12 @@ VVZ uses fewer than VV does. The ones it relies on:
 - **`Vv::Graph.facade_version → String`** — VVZ's
   saved-query and snapshot surfaces include this in their
   output payloads as a producer-fingerprint. Pinned shape.
-- **`Vv::Graph::Capabilities.respond_to?(:select)`** — VVZ does
-  not branch on this today (`select` has been pinned since
-  PLAN_0.1.0 phase C); the introspection seam exists for future
-  use if vv-graph ever splits the facade.
+- **`Vv::Graph.sparql_method_available?(name)`** — predicate-shaped
+  advertisement over the SPARQL facade methods (shipped vv-graph
+  v0.19.0 per B2 below). VVZ does not branch on this today
+  (`select` has been pinned since PLAN_0.1.0 phase C); the
+  introspection seam exists for future use if vv-graph ever
+  splits the facade.
 
 VVZ does **not** consume:
 
@@ -253,17 +255,43 @@ the upstream resolver now does the right thing on its own. The
 `:requires_extension` skip-gate stays — that's the right
 discipline regardless of who does the resolving.
 
-### B2 — `Capabilities.respond_to?(:select)` opt-in
+### B2 — `Vv::Graph.sparql_method_available?` predicate
 
-**Severity: ergonomics. Status: nice-to-have, not blocking.**
+**Severity: ergonomics. Status: ✅ shipped (vv-graph v0.19.0,
+PLAN_0.19.0).**
 
 VVZ's PLAN_0_1_7 fragment surface exposes
 `Vv::Visualize::Tools.catalogue` to in-page WebMCP and the future
 server-side MCP server. Each tool spec declares what facets of
 the SPARQL surface it touches. A predicate-shaped advertisement
-on the `Capabilities` module would let VVZ filter the catalogue
-to "tools whose backing surfaces vv-graph currently advertises,"
-without VVZ introspecting method-presence. Not pressing.
+on `Vv::Graph` lets VVZ filter the catalogue to "tools whose
+backing surfaces vv-graph currently advertises," without VVZ
+introspecting `Vv::Graph::Sparql.respond_to?` from consumer code.
+
+**Resolution (vv-graph v0.19.0).**
+
+```ruby
+Vv::Graph.sparql_method_available?(:select)    # => true
+Vv::Graph.sparql_method_available?(:ask)       # => true
+Vv::Graph.sparql_method_available?(:construct) # => true
+Vv::Graph.sparql_method_available?(:execute)   # => true
+Vv::Graph.sparql_method_available?(:bogus)     # => false
+```
+
+Pinned `true` for the four-method facade at v0.19.0. The
+predicate lives on `Vv::Graph` directly (not a separate
+`Capabilities` namespace — the original CR phrasing was slightly
+off, but the *shape* matches the existing sibling predicates
+`rdf_star_writes_enabled?`, `checkpoint_can_round_trip?`,
+`schema_normalized?`).
+
+The VVZ-side filter, when wired up:
+
+```ruby
+tools.catalogue.select do |tool|
+  Vv::Graph.sparql_method_available?(tool.backing_sparql_method)
+end
+```
 
 ## Drift signals — what changes break VVZ
 
